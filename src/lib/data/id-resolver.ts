@@ -81,7 +81,11 @@ export class IdResolver {
       const resolved: Record<string, unknown> = {};
 
       for (const [key, value] of Object.entries(record)) {
-        if (key === 'Id') continue;
+        // Preserve source Salesforce Id as __sourceId for cross-org mapping during import
+        if (key === 'Id') {
+          resolved['__sourceId'] = value;
+          continue;
+        }
 
         const refField = referenceFields.find((f) => f.name === key);
 

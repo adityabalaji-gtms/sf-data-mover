@@ -4,9 +4,10 @@ import { SfCommand, Flags } from '@salesforce/sf-plugins-core';
 import { Connection, Org } from '@salesforce/core';
 import { BulkLoader } from '../../lib/import/bulk-loader.js';
 import { ImportTracker } from '../../lib/import/import-tracker.js';
-import { CsvPreprocessor, AutoNumberMappings } from '../../lib/import/csv-preprocessor.js';
+import { CsvPreprocessor, AutoNumberMappings, SfIdMappings } from '../../lib/import/csv-preprocessor.js';
 import { RetryHandler } from '../../lib/import/retry-handler.js';
 import { ExportManifest, ManifestFile, ImportLog, DeferredConditionsUpdate, BulkJobInfo } from '../../lib/types.js';
+import { parse } from 'csv-parse/sync';
 
 export default class Import extends SfCommand<ImportLog> {
   public static readonly summary = 'Import exported CSVs into a target org via Bulk API 2.0.';
@@ -92,6 +93,7 @@ export default class Import extends SfCommand<ImportLog> {
     mkdirSync(resultsDir, { recursive: true });
 
     const autoNumberMappings: AutoNumberMappings = new Map();
+    const sfIdMappings: SfIdMappings = new Map();
     const deferredConditionsUpdates: DeferredConditionsUpdate[] = [];
 
     // Pre-import: deactivate rules — extract field name from manifest notes
@@ -135,9 +137,9 @@ export default class Import extends SfCommand<ImportLog> {
           this.log(`  deferred ${condResult.deferredUpdates.length} Custom→All conditions (will restore after tier 2)`);
         }
 
-        // Step 2: Main preprocessing (auto-number ext IDs, stripping, rewriting)
+        // Step 2: Main preprocessing (auto-number ext IDs, stripping, rewriting, SF ID resolution)
         const pp = await preprocessor.preprocess(
-          file.sobject, file.externalIdField, csvContent, autoNumberMappings,
+          file.sobject, file.externalIdField, csvContent, autoNumberMappings, sfIdMappings,
         );
         if (pp.strategy === 'id-mapped') {
           this.spinner.status = `${file.sobject} (${pp.existingRecordCount} update / ${pp.newRecordCount} insert)`;
@@ -160,12 +162,14 @@ export default class Import extends SfCommand<ImportLog> {
         if (needsSplit) {
           await this.loadSplitCsv(
             file, dedup.csvContent, pp.externalIdField, loader, preprocessor,
-            tracker, retryHandler, resultsDir, autoNumberMappings, recordCount,
+            tracker, retryHandler, resultsDir, autoNumberMappings, sfIdMappings,
+            pp.sourceIds, recordCount,
           );
         } else {
           await this.loadSingleCsv(
             file, dedup.csvContent, pp, loader, preprocessor,
-            tracker, retryHandler, resultsDir, autoNumberMappings, recordCount,
+            tracker, retryHandler, resultsDir, autoNumberMappings, sfIdMappings,
+            recordCount,
           );
         }
 
@@ -280,10 +284,28 @@ export default class Import extends SfCommand<ImportLog> {
     retryHandler: RetryHandler,
     resultsDir: string,
     autoNumberMappings: AutoNumberMappings,
+    sfIdMappings: SfIdMappings,
+    sourceIds: string[],
     totalRecordCount: number,
   ): Promise<void> {
     const split = preprocessor.splitByExternalId(csvContent, extIdField);
     const tag = basename(file.filename, '.csv');
+
+    // Split sourceIds by the same criterion (ext ID present/absent) to maintain correlation
+    const upsertSourceIds: string[] = [];
+    const insertSourceIds: string[] = [];
+    if (sourceIds.length > 0) {
+      const cleanCsv = csvContent.charCodeAt(0) === 0xfeff ? csvContent.slice(1) : csvContent;
+      const rows = parse(cleanCsv, { columns: true, skip_empty_lines: true, relax_quotes: true, relax_column_count: true }) as Record<string, string>[];
+      for (let i = 0; i < rows.length && i < sourceIds.length; i++) {
+        const val = rows[i][extIdField];
+        if (val && val.trim()) {
+          upsertSourceIds.push(sourceIds[i]);
+        } else {
+          insertSourceIds.push(sourceIds[i]);
+        }
+      }
+    }
 
     // Part A: Upsert rows with ext ID
     if (split.withExtIdCount > 0) {
@@ -292,12 +314,19 @@ export default class Import extends SfCommand<ImportLog> {
       const successCsv = await loader.getSuccessResults(jobId);
       let failedCsv = await loader.getFailedResults(jobId);
 
-      // Retry transient failures
       const retryResult = await this.retryIfNeeded(
         retryHandler, file.sobject, extIdField, failedCsv, info, `${tag}_upsert`,
       );
       if (retryResult) {
         failedCsv = retryResult.permanentFailureCsv;
+      }
+
+      // Build SF ID mapping from upsert results
+      if (upsertSourceIds.length > 0) {
+        const mapped = this.buildSfIdMapping(upsertSourceIds, successCsv, info);
+        if (mapped > 0) {
+          for (const [src, tgt] of this.lastSfIdBatch) sfIdMappings.set(src, tgt);
+        }
       }
 
       tracker.addResult(
@@ -325,6 +354,15 @@ export default class Import extends SfCommand<ImportLog> {
         failedCsv = retryResult.permanentFailureCsv;
       }
 
+      // Build SF ID mapping from insert results
+      if (insertSourceIds.length > 0) {
+        const mapped = this.buildSfIdMapping(insertSourceIds, successCsv, info);
+        if (mapped > 0) {
+          for (const [src, tgt] of this.lastSfIdBatch) sfIdMappings.set(src, tgt);
+          this.log(`  sf-id mapping: ${mapped} source→target entries`);
+        }
+      }
+
       tracker.addResult(
         file.order, file.sobject, null, file.filename,
         split.withoutExtIdCount, jobId, info, successCsv,
@@ -343,13 +381,14 @@ export default class Import extends SfCommand<ImportLog> {
   private async loadSingleCsv(
     file: ManifestFile,
     csvContent: string,
-    pp: { externalIdField: string; strategy: string; sourceExtIds: string[] },
+    pp: { externalIdField: string; strategy: string; sourceExtIds: string[]; sourceIds: string[] },
     loader: BulkLoader,
     preprocessor: CsvPreprocessor,
     tracker: ImportTracker,
     retryHandler: RetryHandler,
     resultsDir: string,
     autoNumberMappings: AutoNumberMappings,
+    sfIdMappings: SfIdMappings,
     recordCount: number,
   ): Promise<void> {
     const { jobId, info } = await loader.runUpsert(file.sobject, pp.externalIdField, csvContent);
@@ -366,6 +405,15 @@ export default class Import extends SfCommand<ImportLog> {
         for (const [src, tgt] of objMapping) existing.set(src, tgt);
         autoNumberMappings.set(file.externalIdField, existing);
         this.log(`  auto-number mapping: ${objMapping.size} source→target entries`);
+      }
+    }
+
+    // Build source SF ID → target SF ID mapping for cross-org reference resolution
+    if (pp.sourceIds.length > 0) {
+      const idMapped = this.buildSfIdMapping(pp.sourceIds, successCsv, info);
+      if (idMapped > 0) {
+        for (const [src, tgt] of this.lastSfIdBatch) sfIdMappings.set(src, tgt);
+        this.log(`  sf-id mapping: ${idMapped} source→target entries`);
       }
     }
 
@@ -427,6 +475,9 @@ export default class Import extends SfCommand<ImportLog> {
    * After all tiers are loaded, update rules that had ConditionsMet temporarily
    * changed from 'Custom' to 'All'. Resolves source ext IDs to target IDs
    * via the auto-number mappings built during import.
+   *
+   * Works for both CPQ (SBQQ__ConditionsMet__c) and Advanced Approvals
+   * (sbaa__ConditionsMet__c) — field names are stored on each deferred update.
    */
   private async applyDeferredConditionsUpdates(
     updates: DeferredConditionsUpdate[],
@@ -434,7 +485,7 @@ export default class Import extends SfCommand<ImportLog> {
     loader: BulkLoader,
     conn: Connection,
   ): Promise<void> {
-    // Group by sobject
+    // Group by sobject (different objects may use different field names)
     const bySobject = new Map<string, DeferredConditionsUpdate[]>();
     for (const u of updates) {
       const arr = bySobject.get(u.sobject) ?? [];
@@ -443,11 +494,13 @@ export default class Import extends SfCommand<ImportLog> {
     }
 
     for (const [sobject, objUpdates] of bySobject) {
-      this.spinner.start(`Restoring ${objUpdates.length} Custom conditions on ${sobject}`);
+      const { conditionsMetField, advancedConditionField, externalIdField } = objUpdates[0];
+      this.spinner.start(
+        `Restoring ${objUpdates.length} Custom conditions on ${sobject} (${conditionsMetField})`,
+      );
 
       // Resolve source ext IDs → target ext IDs using auto-number mappings
-      const extIdField = 'CPQ_External_ID__c';
-      const mapping = autoNumberMappings.get(extIdField);
+      const mapping = autoNumberMappings.get(externalIdField);
       const targetExtIds: string[] = objUpdates.map((u) =>
         mapping?.get(u.sourceExtId) ?? u.sourceExtId,
       );
@@ -458,16 +511,21 @@ export default class Import extends SfCommand<ImportLog> {
       for (let i = 0; i < targetExtIds.length; i += CHUNK) {
         const chunk = targetExtIds.slice(i, i + CHUNK);
         const inClause = chunk.map((v) => `'${v}'`).join(',');
-        const result = await conn.query<Record<string, string>>(
-          `SELECT Id, ${extIdField} FROM ${sobject} WHERE ${extIdField} IN (${inClause})`,
-        );
-        for (const rec of result.records) {
-          idMap.set(rec[extIdField], rec.Id);
+        try {
+          const result = await conn.query<Record<string, string>>(
+            `SELECT Id, ${externalIdField} FROM ${sobject} WHERE ${externalIdField} IN (${inClause})`,
+          );
+          for (const rec of result.records) {
+            idMap.set(rec[externalIdField], rec.Id);
+          }
+        } catch {
+          this.spinner.stop(`skipped (${externalIdField} query failed)`);
+          continue;
         }
       }
 
-      // Build update CSV
-      const csvRows = ['Id,SBQQ__ConditionsMet__c,SBQQ__AdvancedCondition__c'];
+      // Build update CSV using the actual field names from the deferred updates
+      const csvRows = [`Id,${conditionsMetField},${advancedConditionField}`];
       let matched = 0;
       for (let i = 0; i < objUpdates.length; i++) {
         const targetExtId = targetExtIds[i];
@@ -498,6 +556,59 @@ export default class Import extends SfCommand<ImportLog> {
         this.spinner.stop(`${matched} rules restored to Custom`);
       }
     }
+  }
+
+  /** Temporary storage for the last buildSfIdMapping call results */
+  private lastSfIdBatch = new Map<string, string>();
+
+  /**
+   * Build source SF ID → target SF ID mapping from __sourceId values and
+   * Bulk API success results. Uses row-order correlation: for complete-success
+   * batches, success row N corresponds to source row N.
+   *
+   * Returns the count of mapped entries. Results stored in this.lastSfIdBatch.
+   */
+  private buildSfIdMapping(
+    sourceIds: string[],
+    successCsv: string,
+    info: BulkJobInfo,
+  ): number {
+    this.lastSfIdBatch = new Map();
+    if (sourceIds.length === 0 || !successCsv?.trim()) return 0;
+
+    const successRecords = parse(successCsv, {
+      columns: true,
+      skip_empty_lines: true,
+      bom: true,
+      relax_quotes: true,
+    }) as Record<string, string>[];
+
+    // Row-order correlation: when all records succeed, success row i = source row i
+    const allSucceeded = info.numberRecordsFailed === 0;
+
+    if (allSucceeded && successRecords.length === sourceIds.length) {
+      for (let i = 0; i < sourceIds.length; i++) {
+        const srcId = sourceIds[i];
+        const tgtId = successRecords[i]?.['sf__Id'];
+        if (srcId && tgtId && srcId !== tgtId) {
+          this.lastSfIdBatch.set(srcId, tgtId);
+        }
+      }
+    } else if (allSucceeded) {
+      // Row count mismatch (shouldn't happen) — try partial correlation
+      const limit = Math.min(sourceIds.length, successRecords.length);
+      for (let i = 0; i < limit; i++) {
+        const srcId = sourceIds[i];
+        const tgtId = successRecords[i]?.['sf__Id'];
+        if (srcId && tgtId && srcId !== tgtId) {
+          this.lastSfIdBatch.set(srcId, tgtId);
+        }
+      }
+    }
+    // For partial success, we can't reliably correlate without content matching.
+    // Skipped for now — the mapping will be incomplete for failed rows.
+
+    return this.lastSfIdBatch.size;
   }
 
   private printPlan(files: ManifestFile[]): void {

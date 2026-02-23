@@ -11,6 +11,8 @@ export interface PreprocessResult {
   strategy: 'direct-upsert' | 'id-mapped';
   /** Source external ID values in row order, for post-import auto-number mapping */
   sourceExtIds: string[];
+  /** Source Salesforce IDs in row order, from __sourceId column (for cross-org ID mapping) */
+  sourceIds: string[];
   strippedColumns: string[];
 }
 
@@ -33,6 +35,9 @@ export interface SplitResult {
 
 /** Accumulated mapping of source auto-number → target auto-number, keyed by external ID field name */
 export type AutoNumberMappings = Map<string, Map<string, string>>;
+
+/** Accumulated mapping of source Salesforce ID → target Salesforce ID (cross-org record mapping) */
+export type SfIdMappings = Map<string, string>;
 
 const SFID_PATTERN = /^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$/;
 const ALWAYS_STRIP = new Set(['OwnerId', 'CreatedById', 'LastModifiedById']);
@@ -60,16 +65,21 @@ export class CsvPreprocessor {
 
   /**
    * Preprocess a CSV for import.
-   * 1. Rewrite relationship column values using accumulated auto-number mappings
-   * 2. Strip OwnerId and unresolved raw Salesforce ID columns
-   * 3. Handle auto-number external IDs via Id mapping
+   * 1. Extract __sourceId column (source SF IDs for cross-org mapping)
+   * 2. Rewrite relationship column values using accumulated auto-number mappings
+   * 3. Resolve raw reference fields using accumulated SF ID mappings
+   * 4. Strip OwnerId and remaining unresolved raw Salesforce ID columns
+   * 5. Handle auto-number external IDs via Id mapping
    */
   async preprocess(
     sobject: string,
     externalIdField: string | null,
     csvContent: string,
     autoNumberMappings?: AutoNumberMappings,
+    sfIdMappings?: SfIdMappings,
   ): Promise<PreprocessResult> {
+    this.resolvedRefColumns = new Set<string>();
+
     const clean = csvContent.charCodeAt(0) === 0xfeff ? csvContent.slice(1) : csvContent;
     let records = parse(clean, {
       columns: true,
@@ -86,27 +96,45 @@ export class CsvPreprocessor {
         existingRecordCount: 0,
         strategy: 'direct-upsert',
         sourceExtIds: [],
+        sourceIds: [],
         strippedColumns: [],
       };
     }
 
-    const headers = Object.keys(records[0]);
+    let headers = Object.keys(records[0]);
 
-    // Step 1: Rewrite relationship columns using accumulated auto-number mappings
+    // Step 1: Extract __sourceId column (added by export for cross-org mapping)
+    const sourceIds: string[] = [];
+    if (headers.includes('__sourceId')) {
+      for (const rec of records) {
+        sourceIds.push(rec['__sourceId'] ?? '');
+        delete rec['__sourceId'];
+      }
+      headers = headers.filter((h) => h !== '__sourceId');
+    }
+
+    // Step 2: Rewrite relationship columns using accumulated auto-number mappings
     if (autoNumberMappings && autoNumberMappings.size > 0) {
       records = this.rewriteRelationshipColumns(records, headers, autoNumberMappings);
     }
 
-    // Step 2: Identify columns to strip
+    // Step 3: Resolve raw reference fields using SF ID mappings
+    if (sfIdMappings && sfIdMappings.size > 0) {
+      records = await this.resolveRawReferences(records, headers, sobject, sfIdMappings);
+    }
+
+    // Step 4: Identify columns to strip (raw IDs that couldn't be resolved)
     const columnsToStrip = await this.identifyColumnsToStrip(sobject, headers, externalIdField);
 
-    // Step 3: Handle external ID field writability
+    // Step 5: Handle external ID field writability
     if (externalIdField) {
       const writable = await this.isFieldWritable(sobject, externalIdField);
       if (!writable) {
-        return this.transformForNonWritableExtId(
+        const result = await this.transformForNonWritableExtId(
           sobject, externalIdField, records, headers, columnsToStrip, autoNumberMappings,
         );
+        result.sourceIds = sourceIds;
+        return result;
       }
     }
 
@@ -120,17 +148,23 @@ export class CsvPreprocessor {
         existingRecordCount: 0,
         strategy: 'direct-upsert',
         sourceExtIds: [],
+        sourceIds,
         strippedColumns: columnsToStrip,
       };
     }
 
+    // Rebuild CSV from (possibly modified) records
+    const rows = records.map((rec) => headers.map((h) => rec[h] ?? ''));
+    const outputCsv = stringify([headers, ...rows]);
+
     return {
-      csvContent,
+      csvContent: outputCsv,
       externalIdField: externalIdField ?? 'Id',
       newRecordCount: 0,
       existingRecordCount: 0,
       strategy: 'direct-upsert',
       sourceExtIds: [],
+      sourceIds,
       strippedColumns: [],
     };
   }
@@ -253,9 +287,11 @@ export class CsvPreprocessor {
   }
 
   /**
-   * Temporarily change rows with SBQQ__ConditionsMet__c = 'Custom' to 'All'
-   * and blank SBQQ__AdvancedCondition__c. This bypasses CPQ's validation rule
-   * that requires conditions to exist before Custom can be set.
+   * Auto-detect any ConditionsMet field (SBQQ__ConditionsMet__c for CPQ rules,
+   * sbaa__ConditionsMet__c for Advanced Approvals) and temporarily change rows
+   * with value 'Custom' to 'All', blanking the corresponding AdvancedCondition
+   * field. This bypasses validation rules that require conditions to exist
+   * before Custom can be set.
    *
    * Returns deferred updates to apply after conditions are loaded.
    */
@@ -275,27 +311,40 @@ export class CsvPreprocessor {
     if (records.length === 0) return { csvContent, deferredUpdates: [] };
 
     const headers = Object.keys(records[0]);
-    if (!headers.includes('SBQQ__ConditionsMet__c')) {
+
+    // Auto-detect ConditionsMet / AdvancedCondition field pairs
+    const conditionsMetField = headers.find((h) => h.endsWith('ConditionsMet__c'));
+    if (!conditionsMetField) {
       return { csvContent, deferredUpdates: [] };
     }
+
+    // Derive the AdvancedCondition field from the same namespace prefix
+    const prefix = conditionsMetField.substring(0, conditionsMetField.indexOf('ConditionsMet__c'));
+    const advancedCondField = `${prefix}AdvancedCondition__c`;
+    const hasAdvancedCond = headers.includes(advancedCondField);
 
     const deferredUpdates: DeferredConditionsUpdate[] = [];
 
     for (const rec of records) {
-      if (rec['SBQQ__ConditionsMet__c'] !== 'Custom') continue;
+      if (rec[conditionsMetField] !== 'Custom') continue;
 
       const extIdValue = extIdFieldName ? (rec[extIdFieldName] ?? '') : '';
       if (!extIdValue) continue;
 
       deferredUpdates.push({
         sobject,
+        externalIdField: extIdFieldName!,
         sourceExtId: extIdValue,
-        conditionsMet: rec['SBQQ__ConditionsMet__c'],
-        advancedCondition: rec['SBQQ__AdvancedCondition__c'] ?? '',
+        conditionsMetField,
+        advancedConditionField: advancedCondField,
+        conditionsMet: rec[conditionsMetField],
+        advancedCondition: hasAdvancedCond ? (rec[advancedCondField] ?? '') : '',
       });
 
-      rec['SBQQ__ConditionsMet__c'] = 'All';
-      rec['SBQQ__AdvancedCondition__c'] = '';
+      rec[conditionsMetField] = 'All';
+      if (hasAdvancedCond) {
+        rec[advancedCondField] = '';
+      }
     }
 
     if (deferredUpdates.length === 0) return { csvContent, deferredUpdates: [] };
@@ -405,6 +454,76 @@ export class CsvPreprocessor {
   }
 
   /**
+   * Resolve raw Salesforce ID reference fields using the accumulated SF ID mappings.
+   *
+   * Only processes columns that are ACTUAL reference/lookup fields per the schema
+   * (avoids corrupting external ID fields whose values look like Salesforce IDs).
+   *
+   * Only resolves a value when the corresponding relationship column (e.g.,
+   * sbaa__TestedVariable__r.ATGExternalID__c) is blank for that row. If the
+   * relationship column has a value, the export already resolved it — leave it alone.
+   *
+   * Unresolvable source IDs are blanked (they'd fail as cross-org IDs anyway).
+   */
+  private async resolveRawReferences(
+    records: Record<string, string>[],
+    headers: string[],
+    sobject: string,
+    sfIdMappings: SfIdMappings,
+  ): Promise<Record<string, string>[]> {
+    // Use schema to identify ACTUAL reference fields (not external ID fields)
+    const fields = await this.getFieldDescribes(sobject);
+    const refFieldNames = new Set(fields.filter((f) => f.type === 'reference').map((f) => f.name));
+
+    const refColumns: { directCol: string; relCols: string[] }[] = [];
+    for (const h of headers) {
+      if (h.includes('.') || h === 'Id' || h === '__sourceId') continue;
+      if (ALWAYS_STRIP.has(h)) continue;
+
+      // Schema-based check: only process actual reference/lookup fields
+      if (!refFieldNames.has(h)) continue;
+
+      const sample = records.find((r) => r[h] && SFID_PATTERN.test(r[h]));
+      if (!sample) continue;
+
+      const relPrefix = h.replace(/__c$/, '__r.');
+      const relCols = headers.filter((rh) => rh.startsWith(relPrefix));
+
+      refColumns.push({ directCol: h, relCols });
+    }
+
+    if (refColumns.length === 0) return records;
+
+    const resolvedColumns = new Set<string>();
+    const result = records.map((rec) => {
+      const newRec = { ...rec };
+      for (const { directCol, relCols } of refColumns) {
+        const val = newRec[directCol];
+        if (!val || !SFID_PATTERN.test(val)) continue;
+
+        // Only resolve if ALL relationship columns for this reference are blank
+        const relHasValue = relCols.some((rc) => (newRec[rc] ?? '').trim() !== '');
+        if (relHasValue) continue;
+
+        const targetId = sfIdMappings.get(val);
+        if (targetId) {
+          newRec[directCol] = targetId;
+          resolvedColumns.add(directCol);
+        } else {
+          newRec[directCol] = '';
+        }
+      }
+      return newRec;
+    });
+
+    this.resolvedRefColumns = resolvedColumns;
+    return result;
+  }
+
+  /** Columns that were resolved by resolveRawReferences — should NOT be stripped */
+  private resolvedRefColumns = new Set<string>();
+
+  /**
    * Rewrite values in relationship columns (e.g., SBQQ__Rule__r.CPQ_External_ID__c)
    * using accumulated auto-number mappings.
    */
@@ -444,7 +563,8 @@ export class CsvPreprocessor {
   /**
    * Identify columns to strip from the CSV:
    * - OwnerId, CreatedById, LastModifiedById (always strip)
-   * - Reference fields containing raw Salesforce IDs (unresolved by the export ID resolver)
+   * - Reference fields containing raw Salesforce IDs that haven't been resolved
+   *   by sfIdMappings (still contain source-org IDs that won't work cross-org)
    */
   private async identifyColumnsToStrip(
     sobject: string,
@@ -456,22 +576,19 @@ export class CsvPreprocessor {
     const fieldMap = new Map(fields.map((f) => [f.name, f]));
 
     for (const h of headers) {
-      // Skip relationship columns (already resolved) and external ID field
       if (h.includes('.')) continue;
       if (h === externalIdField) continue;
       if (h === 'Id') continue;
 
-      // Always strip user reference fields
       if (ALWAYS_STRIP.has(h)) {
         toStrip.push(h);
         continue;
       }
 
-      // Check if this is a reference field with raw Salesforce IDs
       const fieldDesc = fieldMap.get(h);
       if (fieldDesc && fieldDesc.type === 'reference' && fieldDesc.referenceTo.length > 0) {
-        // This is a lookup/reference field that wasn't resolved to relationship notation
-        // by the export. It contains raw Salesforce IDs that won't work cross-org.
+        // Don't strip columns that were already resolved to target-org IDs
+        if (this.resolvedRefColumns.has(h)) continue;
         toStrip.push(h);
       }
     }
@@ -544,6 +661,7 @@ export class CsvPreprocessor {
       existingRecordCount: existingCount,
       strategy: 'id-mapped',
       sourceExtIds,
+      sourceIds: [],
       strippedColumns: [...allStrip],
     };
   }

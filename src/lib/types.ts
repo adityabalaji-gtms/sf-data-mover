@@ -234,13 +234,19 @@ export interface BulkJobInfo {
 }
 
 /**
- * Tracks a rule row whose SBQQ__ConditionsMet__c was temporarily changed from
- * "Custom" to "All" during initial import. After conditions/error-conditions
- * are loaded, the rule is updated back to Custom + its AdvancedCondition.
+ * Tracks a rule row whose ConditionsMet field was temporarily changed from
+ * "Custom" to "All" during initial import. After conditions are loaded,
+ * the rule is updated back to Custom + its AdvancedCondition.
+ *
+ * Works for both CPQ rules (SBQQ__ConditionsMet__c) and Advanced Approvals
+ * (sbaa__ConditionsMet__c) by storing the actual field names.
  */
 export interface DeferredConditionsUpdate {
   sobject: string;
+  externalIdField: string;
   sourceExtId: string;
+  conditionsMetField: string;
+  advancedConditionField: string;
   conditionsMet: string;
   advancedCondition: string;
 }
