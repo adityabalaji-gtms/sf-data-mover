@@ -13,6 +13,7 @@ export class DiffReporter {
     const lines: string[] = [];
     const header = [
       'Object'.padEnd(40),
+      'Match'.padEnd(14),
       'Source'.padStart(8),
       'Target'.padStart(8),
       'New'.padStart(8),
@@ -25,8 +26,10 @@ export class DiffReporter {
     lines.push('─'.repeat(header.length));
 
     for (const [sobject, diff] of Object.entries(result.objects)) {
+      const strategy = diff.matchStrategy === 'fingerprint' ? 'fingerprint' : 'external-id';
       lines.push([
         sobject.padEnd(40),
+        strategy.padEnd(14),
         String(diff.counts.source).padStart(8),
         String(diff.counts.target).padStart(8),
         String(diff.counts.new).padStart(8),
@@ -44,6 +47,7 @@ export class DiffReporter {
 
     lines.push([
       'TOTAL'.padEnd(40),
+      ''.padEnd(14),
       String(totalSource).padStart(8),
       String(totalTarget).padStart(8),
       String(totals.totalNew).padStart(8),

@@ -1,5 +1,5 @@
 import { Connection } from '@salesforce/core';
-import { Recipe, RecipeObject, ObjectDiff, DiffRecord, ModifiedRecord, DiffResult, DiffSummary, ObjectDescribe } from '../types.js';
+import { Recipe, RecipeObject, ObjectDiff, DiffRecord, ModifiedRecord, DiffResult, DiffSummary, ObjectDescribe, FieldDescribe } from '../types.js';
 import { DataFetcher } from '../data/data-fetcher.js';
 import { QueryBuilder } from '../data/query-builder.js';
 import { SchemaDescriber } from '../schema/describer.js';
@@ -13,8 +13,9 @@ const SYSTEM_FIELDS = new Set([
 ]);
 
 /**
- * Core diff logic: fetches data from both orgs, joins by external ID,
- * and performs field-by-field comparison.
+ * Core diff logic: fetches data from both orgs, joins by external ID
+ * (or content fingerprint for auto-number fields), and performs
+ * field-by-field comparison excluding reference/lookup fields.
  */
 export class DiffEngine {
   constructor(
@@ -61,7 +62,6 @@ export class DiffEngine {
     const extIdField = recipeObj.externalIdField!;
     const queryBuilder = new QueryBuilder();
 
-    // Describe from source org to get field list
     const describer = new SchemaDescriber(this.sourceConn);
     const describe = await describer.describe(recipeObj.sobject);
     const fields = queryBuilder.selectFields(recipeObj, describe, this.recipe.settings);
@@ -78,77 +78,242 @@ export class DiffEngine {
       targetFetcher.fetchAll(soql).catch(() => [] as SalesforceRecord[]),
     ]);
 
-    // Build maps keyed by external ID
-    const sourceMap = this.buildExtIdMap(sourceRecords, extIdField);
-    const targetMap = this.buildExtIdMap(targetRecords, extIdField);
+    const referenceFields = this.getReferenceFields(describe);
+    const extIdDescribe = describe.fields.find((f) => f.name === extIdField);
+    const useFingerprint = extIdDescribe?.autoNumber === true;
 
     const ignoreFields = new Set([
       ...SYSTEM_FIELDS,
       ...(recipeObj.compareIgnoreFields ?? []),
+      ...referenceFields,
     ]);
 
+    // Auto-number external IDs differ per org by definition; exclude from comparison
+    if (useFingerprint) {
+      ignoreFields.add(extIdField);
+    }
+
     const compareFields = fields.filter((f) => !ignoreFields.has(f));
+
+    if (useFingerprint) {
+      return this.diffByFingerprint(
+        sourceRecords, targetRecords, compareFields, describe,
+      );
+    }
+
+    return this.diffByExternalId(
+      sourceRecords, targetRecords, extIdField, compareFields,
+    );
+  }
+
+  /**
+   * Standard diff: join records by external ID field value.
+   */
+  private diffByExternalId(
+    sourceRecords: SalesforceRecord[],
+    targetRecords: SalesforceRecord[],
+    extIdField: string,
+    compareFields: string[],
+  ): ObjectDiff {
+    const sourceMap = this.buildExtIdMap(sourceRecords, extIdField);
+    const targetMap = this.buildExtIdMap(targetRecords, extIdField);
 
     const newRecords: DiffRecord[] = [];
     const modifiedRecords: ModifiedRecord[] = [];
     const deletedRecords: DiffRecord[] = [];
     let identical = 0;
 
-    // Check source records against target
     for (const [extId, sourceRec] of sourceMap) {
       const targetRec = targetMap.get(extId);
 
       if (!targetRec) {
-        newRecords.push({
-          externalId: extId,
-          name: this.extractName(sourceRec),
-        });
+        newRecords.push({ externalId: extId, name: this.extractName(sourceRec) });
         continue;
       }
 
-      const changes: Record<string, { source: unknown; target: unknown }> = {};
-      for (const field of compareFields) {
-        const sv = this.normalize(sourceRec[field]);
-        const tv = this.normalize(targetRec[field]);
-        if (sv !== tv) {
-          changes[field] = { source: sourceRec[field] ?? null, target: targetRec[field] ?? null };
-        }
-      }
-
+      const changes = this.compareRecords(sourceRec, targetRec, compareFields);
       if (Object.keys(changes).length > 0) {
-        modifiedRecords.push({
-          externalId: extId,
-          name: this.extractName(sourceRec),
-          changes,
-        });
+        modifiedRecords.push({ externalId: extId, name: this.extractName(sourceRec), changes });
       } else {
         identical++;
       }
     }
 
-    // Check for deleted (in target but not source)
     for (const [extId, targetRec] of targetMap) {
       if (!sourceMap.has(extId)) {
-        deletedRecords.push({
-          externalId: extId,
-          name: this.extractName(targetRec),
-        });
+        deletedRecords.push({ externalId: extId, name: this.extractName(targetRec) });
       }
     }
 
     return {
       counts: {
-        source: sourceMap.size,
-        target: targetMap.size,
-        new: newRecords.length,
-        modified: modifiedRecords.length,
-        deleted: deletedRecords.length,
-        identical,
+        source: sourceMap.size, target: targetMap.size,
+        new: newRecords.length, modified: modifiedRecords.length,
+        deleted: deletedRecords.length, identical,
       },
-      newRecords,
-      modifiedRecords,
-      deletedRecords,
+      matchStrategy: 'externalId',
+      newRecords, modifiedRecords, deletedRecords,
     };
+  }
+
+  /**
+   * Fingerprint diff: for auto-number external IDs, match records by a
+   * content fingerprint built from all comparable fields.
+   * Handles collisions (true duplicates) via positional matching.
+   */
+  private diffByFingerprint(
+    sourceRecords: SalesforceRecord[],
+    targetRecords: SalesforceRecord[],
+    compareFields: string[],
+    describe: ObjectDescribe,
+  ): ObjectDiff {
+    const fingerprintFields = this.getFingerprintFields(describe, compareFields);
+
+    const sourceGroups = this.buildFingerprintMap(sourceRecords, fingerprintFields);
+    const targetGroups = this.buildFingerprintMap(targetRecords, fingerprintFields);
+
+    const newRecords: DiffRecord[] = [];
+    const modifiedRecords: ModifiedRecord[] = [];
+    const deletedRecords: DiffRecord[] = [];
+    let identical = 0;
+
+    const matchedTargetFingerprints = new Set<string>();
+
+    for (const [fp, sourceGroup] of sourceGroups) {
+      const targetGroup = targetGroups.get(fp);
+
+      if (!targetGroup || targetGroup.length === 0) {
+        for (const rec of sourceGroup) {
+          newRecords.push({ externalId: fp, name: this.extractName(rec) });
+        }
+        continue;
+      }
+
+      matchedTargetFingerprints.add(fp);
+
+      const pairCount = Math.min(sourceGroup.length, targetGroup.length);
+
+      for (let i = 0; i < pairCount; i++) {
+        const changes = this.compareRecords(sourceGroup[i], targetGroup[i], compareFields);
+        if (Object.keys(changes).length > 0) {
+          modifiedRecords.push({
+            externalId: fp,
+            name: this.extractName(sourceGroup[i]),
+            changes,
+          });
+        } else {
+          identical++;
+        }
+      }
+
+      // Extra source records beyond what target has
+      for (let i = pairCount; i < sourceGroup.length; i++) {
+        newRecords.push({ externalId: fp, name: this.extractName(sourceGroup[i]) });
+      }
+
+      // Extra target records beyond what source has
+      for (let i = pairCount; i < targetGroup.length; i++) {
+        deletedRecords.push({ externalId: fp, name: this.extractName(targetGroup[i]) });
+      }
+    }
+
+    // Target fingerprints with no source match at all
+    for (const [fp, targetGroup] of targetGroups) {
+      if (!matchedTargetFingerprints.has(fp)) {
+        for (const rec of targetGroup) {
+          deletedRecords.push({ externalId: fp, name: this.extractName(rec) });
+        }
+      }
+    }
+
+    const sourceTotal = [...sourceGroups.values()].reduce((s, g) => s + g.length, 0);
+    const targetTotal = [...targetGroups.values()].reduce((s, g) => s + g.length, 0);
+
+    return {
+      counts: {
+        source: sourceTotal, target: targetTotal,
+        new: newRecords.length, modified: modifiedRecords.length,
+        deleted: deletedRecords.length, identical,
+      },
+      matchStrategy: 'fingerprint',
+      newRecords, modifiedRecords, deletedRecords,
+    };
+  }
+
+  /**
+   * Build a map of fingerprint → ordered list of records.
+   * Multiple records with the same fingerprint (true duplicates) are grouped together.
+   */
+  private buildFingerprintMap(
+    records: SalesforceRecord[],
+    fingerprintFields: string[],
+  ): Map<string, SalesforceRecord[]> {
+    const map = new Map<string, SalesforceRecord[]>();
+    for (const rec of records) {
+      const fp = this.buildFingerprint(rec, fingerprintFields);
+      const group = map.get(fp) ?? [];
+      group.push(rec);
+      map.set(fp, group);
+    }
+    return map;
+  }
+
+  /**
+   * Create a deterministic string key from a record's field values.
+   * Fields are sorted alphabetically for consistency.
+   */
+  private buildFingerprint(
+    record: SalesforceRecord,
+    fingerprintFields: string[],
+  ): string {
+    return fingerprintFields
+      .map((f) => `${f}=${this.normalize(record[f])}`)
+      .join('|');
+  }
+
+  /**
+   * Returns fields suitable for fingerprinting: non-system, non-reference,
+   * non-auto-number, sorted alphabetically for deterministic key generation.
+   */
+  private getFingerprintFields(
+    describe: ObjectDescribe,
+    compareFields: string[],
+  ): string[] {
+    const autoNumberNames = new Set(
+      describe.fields.filter((f) => f.autoNumber).map((f) => f.name),
+    );
+    return compareFields
+      .filter((f) => !autoNumberNames.has(f))
+      .sort();
+  }
+
+  /**
+   * Returns the set of reference/lookup field names from the schema describe.
+   */
+  private getReferenceFields(describe: ObjectDescribe): Set<string> {
+    const refs = new Set<string>();
+    for (const f of describe.fields) {
+      if (f.type === 'reference') {
+        refs.add(f.name);
+      }
+    }
+    return refs;
+  }
+
+  private compareRecords(
+    sourceRec: SalesforceRecord,
+    targetRec: SalesforceRecord,
+    compareFields: string[],
+  ): Record<string, { source: unknown; target: unknown }> {
+    const changes: Record<string, { source: unknown; target: unknown }> = {};
+    for (const field of compareFields) {
+      const sv = this.normalize(sourceRec[field]);
+      const tv = this.normalize(targetRec[field]);
+      if (sv !== tv) {
+        changes[field] = { source: sourceRec[field] ?? null, target: targetRec[field] ?? null };
+      }
+    }
+    return changes;
   }
 
   private buildExtIdMap(

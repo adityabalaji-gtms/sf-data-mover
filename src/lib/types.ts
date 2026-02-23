@@ -178,6 +178,7 @@ export interface ObjectDiff {
     deleted: number;
     identical: number;
   };
+  matchStrategy: 'externalId' | 'fingerprint';
   newRecords: DiffRecord[];
   modifiedRecords: ModifiedRecord[];
   deletedRecords: DiffRecord[];
