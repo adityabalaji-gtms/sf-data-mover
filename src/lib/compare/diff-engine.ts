@@ -37,7 +37,13 @@ export class DiffEngine {
       }
 
       onProgress?.(recipeObj.sobject, 'fetching...');
-      const diff = await this.diffObject(recipeObj);
+      let diff: ObjectDiff;
+      try {
+        diff = await this.diffObject(recipeObj);
+      } catch {
+        onProgress?.(recipeObj.sobject, 'skipped (object not found in one or both orgs)');
+        continue;
+      }
       objects[recipeObj.sobject] = diff;
 
       summary.totalNew += diff.counts.new;
@@ -73,9 +79,23 @@ export class DiffEngine {
     const sourceFetcher = new DataFetcher(this.sourceConn);
     const targetFetcher = new DataFetcher(this.targetConn);
 
+    // Describe target separately — it may have a different field set
+    const targetDescriber = new SchemaDescriber(this.targetConn);
+    let targetDescribe: ObjectDescribe;
+    try {
+      targetDescribe = await targetDescriber.describe(recipeObj.sobject);
+    } catch {
+      targetDescribe = describe;
+    }
+
+    const targetFields = queryBuilder.selectFields(recipeObj, targetDescribe, this.recipe.settings);
+    const commonFields = fields.filter((f) => targetFields.includes(f));
+    const commonFieldList = commonFields.join(', ');
+    const targetSoql = `SELECT ${commonFieldList} FROM ${recipeObj.sobject}${where}`;
+
     const [sourceRecords, targetRecords] = await Promise.all([
       sourceFetcher.fetchAll(soql),
-      targetFetcher.fetchAll(soql).catch(() => [] as SalesforceRecord[]),
+      targetFetcher.fetchAll(targetSoql),
     ]);
 
     const referenceFields = this.getReferenceFields(describe);
@@ -93,7 +113,7 @@ export class DiffEngine {
       ignoreFields.add(extIdField);
     }
 
-    const compareFields = fields.filter((f) => !ignoreFields.has(f));
+    const compareFields = commonFields.filter((f) => !ignoreFields.has(f));
 
     if (useFingerprint) {
       return this.diffByFingerprint(

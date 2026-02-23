@@ -94,14 +94,19 @@ export default class Import extends SfCommand<ImportLog> {
     const autoNumberMappings: AutoNumberMappings = new Map();
     const deferredConditionsUpdates: DeferredConditionsUpdate[] = [];
 
-    // Pre-import: deactivate rules
-    const deactivateFiles = allFiles.filter((f) => f.notes?.includes('deactivate'));
-    const deactivateObjects = [...new Set(deactivateFiles.map((f) => f.sobject))];
+    // Pre-import: deactivate rules — extract field name from manifest notes
+    const deactivateMap = new Map<string, string>();
+    for (const f of allFiles) {
+      if (f.notes) {
+        const match = f.notes.match(/deactivate (\S+)/);
+        if (match) deactivateMap.set(f.sobject, match[1]);
+      }
+    }
 
-    if (deactivateObjects.length > 0) {
+    if (deactivateMap.size > 0) {
       this.log('── Pre-import: Deactivating rules ──');
-      for (const sobject of deactivateObjects) {
-        await this.deactivateRecords(loader, sobject, conn);
+      for (const [sobject, activeField] of deactivateMap) {
+        await this.deactivateRecords(loader, sobject, conn, activeField);
       }
       this.log('');
     }
@@ -215,10 +220,10 @@ export default class Import extends SfCommand<ImportLog> {
     }
 
     // Post-import: reactivate rules
-    if (deactivateObjects.length > 0) {
+    if (deactivateMap.size > 0) {
       this.log('\n── Post-import: Reactivating rules ──');
-      for (const sobject of deactivateObjects) {
-        await this.reactivateRecords(loader, sobject, conn);
+      for (const [sobject, activeField] of deactivateMap) {
+        await this.reactivateRecords(loader, sobject, conn, activeField);
       }
     }
 
@@ -512,19 +517,26 @@ export default class Import extends SfCommand<ImportLog> {
     loader: BulkLoader,
     sobject: string,
     conn: Connection,
+    activeField: string,
   ): Promise<void> {
-    this.spinner.start(`Deactivating ${sobject}`);
+    this.spinner.start(`Deactivating ${sobject} (${activeField})`);
 
-    const result = await conn.query<{ Id: string }>(
-      `SELECT Id FROM ${sobject} WHERE SBQQ__Active__c = true`,
-    );
+    let result: { records: { Id: string }[] };
+    try {
+      result = await conn.query<{ Id: string }>(
+        `SELECT Id FROM ${sobject} WHERE ${activeField} = true`,
+      );
+    } catch {
+      this.spinner.stop(`skipped (${activeField} not found on target)`);
+      return;
+    }
 
     if (result.records.length === 0) {
       this.spinner.stop('no active records');
       return;
     }
 
-    const csv = 'Id,SBQQ__Active__c\n' + result.records.map((r) => `${r.Id},false`).join('\n');
+    const csv = `Id,${activeField}\n` + result.records.map((r) => `${r.Id},false`).join('\n');
 
     const jobId = await loader.createUpsertJob(sobject, 'Id');
     await loader.uploadCsvData(jobId, csv);
@@ -538,19 +550,26 @@ export default class Import extends SfCommand<ImportLog> {
     loader: BulkLoader,
     sobject: string,
     conn: Connection,
+    activeField: string,
   ): Promise<void> {
-    this.spinner.start(`Reactivating ${sobject}`);
+    this.spinner.start(`Reactivating ${sobject} (${activeField})`);
 
-    const result = await conn.query<{ Id: string }>(
-      `SELECT Id FROM ${sobject} WHERE SBQQ__Active__c = false`,
-    );
+    let result: { records: { Id: string }[] };
+    try {
+      result = await conn.query<{ Id: string }>(
+        `SELECT Id FROM ${sobject} WHERE ${activeField} = false`,
+      );
+    } catch {
+      this.spinner.stop(`skipped (${activeField} not found on target)`);
+      return;
+    }
 
     if (result.records.length === 0) {
       this.spinner.stop('no records to reactivate');
       return;
     }
 
-    const csv = 'Id,SBQQ__Active__c\n' + result.records.map((r) => `${r.Id},true`).join('\n');
+    const csv = `Id,${activeField}\n` + result.records.map((r) => `${r.Id},true`).join('\n');
 
     const jobId = await loader.createUpsertJob(sobject, 'Id');
     await loader.uploadCsvData(jobId, csv);
