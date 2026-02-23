@@ -1,0 +1,40 @@
+{
+  "name": "CPQ Templates",
+  "version": "1.0",
+  "description": "QuoteTemplate + TemplateContent + TemplateSection + LineColumn + Theme.",
+  "objects": [
+    {
+      "sobject": "SBQQ__QuoteTemplate__c",
+      "externalIdField": "CPQ_External_ID__c"
+    },
+    {
+      "sobject": "SBQQ__TemplateContent__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "SBQQ__TemplateSection__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "SBQQ__LineColumn__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "SBQQ__Theme__c",
+      "externalIdField": "ATGExternalID__c"
+    }
+  ],
+  "settings": {
+    "defaultExcludeFields": [
+      "Id",
+      "IsDeleted",
+      "CreatedDate",
+      "CreatedById",
+      "LastModifiedDate",
+      "LastModifiedById",
+      "SystemModstamp"
+    ],
+    "batchSize": 200,
+    "selfReferenceStrategy": "two-pass"
+  }
+}

@@ -1,0 +1,184 @@
+{
+  "name": "CPQ Full Configuration",
+  "version": "1.0",
+  "description": "All CPQ configuration objects for sandbox seeding — products, pricing, rules, templates, approvals.",
+  "objects": [
+    {
+      "sobject": "Product2",
+      "externalIdField": "CPQ_External_ID__c",
+      "filter": "IsActive = true"
+    },
+    {
+      "sobject": "Pricebook2",
+      "externalIdField": null
+    },
+    {
+      "sobject": "SBQQ__SummaryVariable__c",
+      "externalIdField": "CPQ_External_ID__c"
+    },
+    {
+      "sobject": "PricebookEntry",
+      "externalIdField": null,
+      "filter": "IsActive = true",
+      "compositeKey": {
+        "strategy": "lookup-match",
+        "matchFields": [
+          {
+            "field": "Product2Id",
+            "matchBy": "Product2.ProductCode"
+          },
+          {
+            "field": "Pricebook2Id",
+            "matchBy": "Pricebook2.Name"
+          }
+        ],
+        "additionalMatchFields": [
+          "CurrencyIsoCode"
+        ]
+      }
+    },
+    {
+      "sobject": "SBQQ__ProductFeature__c",
+      "externalIdField": "CPQ_External_ID__c"
+    },
+    {
+      "sobject": "SBQQ__PriceRule__c",
+      "externalIdField": "CPQ_External_ID__c",
+      "preImport": {
+        "deactivate": "SBQQ__Active__c"
+      },
+      "postImport": {
+        "reactivate": "SBQQ__Active__c"
+      }
+    },
+    {
+      "sobject": "SBQQ__ProductRule__c",
+      "externalIdField": "CPQ_External_ID__c",
+      "preImport": {
+        "deactivate": "SBQQ__Active__c"
+      },
+      "postImport": {
+        "reactivate": "SBQQ__Active__c"
+      }
+    },
+    {
+      "sobject": "SBQQ__DiscountSchedule__c",
+      "externalIdField": "CPQ_External_ID__c"
+    },
+    {
+      "sobject": "SBQQ__CustomAction__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "SBQQ__ProductOption__c",
+      "externalIdField": "CPQ_External_ID__c"
+    },
+    {
+      "sobject": "SBQQ__PriceCondition__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "SBQQ__PriceAction__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "SBQQ__ErrorCondition__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "SBQQ__ProductAction__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "SBQQ__ConfigurationRule__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "SBQQ__LookupQuery__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "SBQQ__DiscountTier__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "SBQQ__OptionConstraint__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "SBQQ__CustomActionCondition__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "SBQQ__QuoteTemplate__c",
+      "externalIdField": "CPQ_External_ID__c"
+    },
+    {
+      "sobject": "SBQQ__TemplateContent__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "SBQQ__TemplateSection__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "SBQQ__LineColumn__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "SBQQ__Theme__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "sbaa__ApprovalRule__c",
+      "externalIdField": "CPQ_External_ID__c",
+      "preImport": {
+        "deactivate": "sbaa__IsActive__c"
+      },
+      "postImport": {
+        "reactivate": "sbaa__IsActive__c"
+      }
+    },
+    {
+      "sobject": "sbaa__ApprovalCondition__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "sbaa__ApprovalVariable__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "sbaa__ApprovalChain__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "sbaa__Approver__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "sbaa__EmailTemplate__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "Approval_Rule_Product__c",
+      "externalIdField": "CPQ_External_ID__c"
+    },
+    {
+      "sobject": "Product_Mapping__c",
+      "externalIdField": "CPQ_External_ID__c"
+    }
+  ],
+  "settings": {
+    "defaultExcludeFields": [
+      "Id",
+      "IsDeleted",
+      "CreatedDate",
+      "CreatedById",
+      "LastModifiedDate",
+      "LastModifiedById",
+      "SystemModstamp"
+    ],
+    "batchSize": 200,
+    "selfReferenceStrategy": "two-pass"
+  }
+}

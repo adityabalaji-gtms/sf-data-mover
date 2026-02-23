@@ -1,0 +1,59 @@
+{
+  "name": "Approvals",
+  "version": "1.0",
+  "description": "ApprovalRule + ApprovalCondition + ApprovalVariable + ApprovalChain + Approver + EmailTemplate + Approval_Rule_Product.",
+  "objects": [
+    {
+      "sobject": "Product2",
+      "externalIdField": "CPQ_External_ID__c",
+      "filter": "IsActive = true"
+    },
+    {
+      "sobject": "sbaa__ApprovalRule__c",
+      "externalIdField": "CPQ_External_ID__c",
+      "preImport": {
+        "deactivate": "sbaa__IsActive__c"
+      },
+      "postImport": {
+        "reactivate": "sbaa__IsActive__c"
+      }
+    },
+    {
+      "sobject": "sbaa__ApprovalCondition__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "sbaa__ApprovalVariable__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "sbaa__ApprovalChain__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "sbaa__Approver__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "sbaa__EmailTemplate__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "Approval_Rule_Product__c",
+      "externalIdField": "CPQ_External_ID__c"
+    }
+  ],
+  "settings": {
+    "defaultExcludeFields": [
+      "Id",
+      "IsDeleted",
+      "CreatedDate",
+      "CreatedById",
+      "LastModifiedDate",
+      "LastModifiedById",
+      "SystemModstamp"
+    ],
+    "batchSize": 200,
+    "selfReferenceStrategy": "two-pass"
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "name": "CPQ Rules",
+  "version": "1.0",
+  "description": "Price Rules + Product Rules and their children (conditions, actions, lookup queries, summary variables).",
+  "objects": [
+    {
+      "sobject": "SBQQ__SummaryVariable__c",
+      "externalIdField": "CPQ_External_ID__c"
+    },
+    {
+      "sobject": "SBQQ__PriceRule__c",
+      "externalIdField": "CPQ_External_ID__c",
+      "preImport": {
+        "deactivate": "SBQQ__Active__c"
+      },
+      "postImport": {
+        "reactivate": "SBQQ__Active__c"
+      }
+    },
+    {
+      "sobject": "SBQQ__ProductRule__c",
+      "externalIdField": "CPQ_External_ID__c",
+      "preImport": {
+        "deactivate": "SBQQ__Active__c"
+      },
+      "postImport": {
+        "reactivate": "SBQQ__Active__c"
+      }
+    },
+    {
+      "sobject": "SBQQ__PriceCondition__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "SBQQ__PriceAction__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "SBQQ__ErrorCondition__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "SBQQ__ProductAction__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "SBQQ__ConfigurationRule__c",
+      "externalIdField": "ATGExternalID__c"
+    },
+    {
+      "sobject": "SBQQ__LookupQuery__c",
+      "externalIdField": "ATGExternalID__c"
+    }
+  ],
+  "settings": {
+    "defaultExcludeFields": [
+      "Id",
+      "IsDeleted",
+      "CreatedDate",
+      "CreatedById",
+      "LastModifiedDate",
+      "LastModifiedById",
+      "SystemModstamp"
+    ],
+    "batchSize": 200,
+    "selfReferenceStrategy": "two-pass"
+  }
+}

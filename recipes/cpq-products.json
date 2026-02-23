@@ -1,0 +1,62 @@
+{
+  "name": "CPQ Products",
+  "version": "1.0",
+  "description": "Product2 + PricebookEntry + ProductFeature + ProductOption + OptionConstraint.",
+  "objects": [
+    {
+      "sobject": "Product2",
+      "externalIdField": "CPQ_External_ID__c",
+      "filter": "IsActive = true"
+    },
+    {
+      "sobject": "Pricebook2",
+      "externalIdField": null
+    },
+    {
+      "sobject": "PricebookEntry",
+      "externalIdField": null,
+      "filter": "IsActive = true",
+      "compositeKey": {
+        "strategy": "lookup-match",
+        "matchFields": [
+          {
+            "field": "Product2Id",
+            "matchBy": "Product2.ProductCode"
+          },
+          {
+            "field": "Pricebook2Id",
+            "matchBy": "Pricebook2.Name"
+          }
+        ],
+        "additionalMatchFields": [
+          "CurrencyIsoCode"
+        ]
+      }
+    },
+    {
+      "sobject": "SBQQ__ProductFeature__c",
+      "externalIdField": "CPQ_External_ID__c"
+    },
+    {
+      "sobject": "SBQQ__ProductOption__c",
+      "externalIdField": "CPQ_External_ID__c"
+    },
+    {
+      "sobject": "SBQQ__OptionConstraint__c",
+      "externalIdField": "ATGExternalID__c"
+    }
+  ],
+  "settings": {
+    "defaultExcludeFields": [
+      "Id",
+      "IsDeleted",
+      "CreatedDate",
+      "CreatedById",
+      "LastModifiedDate",
+      "LastModifiedById",
+      "SystemModstamp"
+    ],
+    "batchSize": 200,
+    "selfReferenceStrategy": "two-pass"
+  }
+}

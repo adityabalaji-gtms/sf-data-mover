@@ -1,0 +1,52 @@
+{
+  "name": "sf-data-mover",
+  "version": "0.1.0",
+  "description": "Generic Salesforce data migration CLI tool — auto-discovers schemas, builds dependency graphs, exports Inspector-ready CSVs with external ID references.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "sf-data-mover": "./bin/run.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "lint": "tsc --noEmit",
+    "dev": "ts-node ./bin/dev.ts"
+  },
+  "oclif": {
+    "commands": "./dist/commands",
+    "bin": "sf-data-mover",
+    "topicSeparator": " ",
+    "topics": {
+      "data-mover": {
+        "description": "Salesforce data migration tools"
+      },
+      "data-mover recipe": {
+        "description": "Manage migration recipes"
+      }
+    }
+  },
+  "dependencies": {
+    "@oclif/core": "^4",
+    "@salesforce/core": "^8",
+    "@salesforce/sf-plugins-core": "^12",
+    "csv-parse": "^6.1.0",
+    "csv-stringify": "^6"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "ts-node": "^10",
+    "typescript": "^5"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "recipes",
+    "oclif.manifest.json"
+  ]
+}
