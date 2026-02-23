@@ -60,11 +60,31 @@ sf data-mover --help
 
 ### 4. Authenticate Your Orgs
 
-Make sure you have at least a source and target org authenticated:
+Make sure you have at least a source and target org authenticated.
+
+**Production / Developer Edition** (login.salesforce.com):
 
 ```bash
-sf org login web --alias UAT
-sf org login web --alias ppdev
+sf org login web --alias production
+```
+
+**Sandboxes** (test.salesforce.com):
+
+```bash
+sf org login web --alias UAT --instance-url https://test.salesforce.com
+sf org login web --alias ppdev --instance-url https://test.salesforce.com
+```
+
+**Custom / My Domain** (e.g., `mycompany.my.salesforce.com`):
+
+```bash
+sf org login web --alias UAT --instance-url https://mycompany--uat.sandbox.my.salesforce.com
+```
+
+Verify your authenticated orgs:
+
+```bash
+sf org list
 ```
 
 ### 5. Discover Your Source Org
