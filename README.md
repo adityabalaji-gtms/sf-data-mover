@@ -21,6 +21,7 @@ This tool automates all of that — schema discovery, dependency ordering, ID re
 - **External ID Resolution** — Salesforce IDs automatically replaced with external key references for cross-org portability
 - **Bulk API 2.0 Import** — Upsert/insert with automatic handling of auto-number fields, null external IDs, duplicates, and CPQ validation rules
 - **Org Comparison** — Diff two orgs record-by-record; export only the delta
+- **Selective Rule Export** — Export specific rules by Name or ID along with all related child and upstream records
 - **Rollback** — Every import is tracked; roll back by deleting loaded records in reverse dependency order
 - **Retry Logic** — Transient failures (lock contention, batch save errors) automatically retried with backoff
 
@@ -117,6 +118,26 @@ This creates:
 - Tiered CSV files with external ID references (no Salesforce IDs)
 - A `_manifest.json` describing load order, operations, and record counts
 
+### 8a. Selective Export (Specific Rules)
+
+Export only specific rules and their related records:
+
+```bash
+# Export 2 approval rules by name, plus all related conditions, variables, chains, etc.
+sf data-mover export --target-org UAT --recipe recipes/approvals.json --output-dir ./exports/selected/ \
+  --select-object sbaa__ApprovalRule__c \
+  --select "Volume Discount,Tiered Pricing" \
+  --match-by name
+
+# Export specific price rules by Salesforce ID
+sf data-mover export --target-org UAT --recipe recipes/cpq-rules.json --output-dir ./exports/selected/ \
+  --select-object SBQQ__PriceRule__c \
+  --select "a0x1P000000ABC,a0x1P000000DEF" \
+  --match-by id
+```
+
+The `--select` flags work by walking the recipe's dependency graph to discover all child records (conditions, actions) and upstream dependencies (variables, approvers, templates) related to the selected root rules. The resulting CSVs are importable with the standard `import` command — no additional flags needed.
+
 ### 8. Import
 
 Load the exported CSVs into the target org:
@@ -155,6 +176,15 @@ Export only the delta (new + modified records):
 sf data-mover compare --source-org UAT --target-org ppdev --recipe recipes/cpq-rules.json --export-delta ./exports/delta/
 ```
 
+Compare specific rules only (combines `--select` with `--export-delta` for surgical delta migrations):
+
+```bash
+sf data-mover compare --source-org UAT --target-org ppdev --recipe recipes/approvals.json \
+  --select-object sbaa__ApprovalRule__c \
+  --select "Volume Discount" \
+  --export-delta ./exports/delta-rules/
+```
+
 ### 10. Rollback
 
 If something goes wrong, roll back an import using the tracked log:
@@ -175,9 +205,9 @@ sf data-mover rollback --target-org ppdev --import-log ./exports/uat-rules/_impo
 |---------|-------------|
 | `sf data-mover discover` | Discover schemas, relationships, and dependency tiers in an org |
 | `sf data-mover plan` | Dry-run: show what would be exported and in what order |
-| `sf data-mover export` | Export data as dependency-ordered CSVs with external ID references |
+| `sf data-mover export` | Export data as dependency-ordered CSVs with external ID references (supports `--select` for specific rules) |
 | `sf data-mover import` | Import CSVs via Bulk API 2.0 with rollback tracking |
-| `sf data-mover compare` | Compare two orgs record-by-record, optionally export delta |
+| `sf data-mover compare` | Compare two orgs record-by-record, optionally export delta (supports `--select` for specific rules) |
 | `sf data-mover rollback` | Delete previously imported records in reverse dependency order |
 | `sf data-mover recipe create` | Create a recipe from a preset or custom object selection |
 | `sf data-mover recipe validate` | Validate a recipe JSON file |
@@ -289,6 +319,8 @@ src/
     │   ├── diff-engine.ts   # Record-level diff by external ID
     │   ├── diff-reporter.ts # Summary tables and reports
     │   └── delta-exporter.ts # Export only changed records
+    ├── rules/               # Selective rule filtering
+    │   └── rule-filter.ts   # Graph-walking filter for specific rules
     ├── output/              # Export file writers
     │   ├── csv-writer.ts    # CSV file output
     │   └── manifest-writer.ts # _manifest.json generation
