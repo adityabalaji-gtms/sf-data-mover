@@ -12,15 +12,34 @@ function obj(sobject: string, externalIdField: string | null, extra?: Partial<Re
 
 export const CPQ_FULL: Recipe = {
   name: 'CPQ Full Configuration',
-  version: '1.0',
-  description: 'All CPQ configuration objects for sandbox seeding — products, pricing, rules, templates, approvals.',
+  version: '2.0',
+  description: 'All CPQ configuration objects for sandbox seeding — products, pricing, rules, templates, approvals, favorites, scripts.',
   objects: [
     // Tier 0 — no dependencies
+    obj('SBQQ__BlockPrice__c', ATG_EXT_ID),
+    obj('SBQQ__CustomScript__c', ATG_EXT_ID),
+    obj('SBQQ__Favorite__c', null),
+    obj('SBQQ__InstallProcessorLog__c', null),
+    obj('SBQQ__SearchFilter__c', ATG_EXT_ID),
+    obj('SBQQ__SummaryVariable__c', CPQ_EXT_ID),
+    obj('SBQQ__TemplateContent__c', ATG_EXT_ID),
     obj('Product2', CPQ_EXT_ID, { filter: 'IsActive = true' }),
     obj('Pricebook2', null),
-    obj('SBQQ__SummaryVariable__c', CPQ_EXT_ID),
 
-    // Tier 1 — depends on Product2, Pricebook2, SummaryVariable
+    // Tier 1 — depends on Product2, Pricebook2, SummaryVariable, TemplateContent
+    obj('SBQQ__Cost__c', ATG_EXT_ID),
+    obj('SBQQ__CustomAction__c', ATG_EXT_ID),
+    obj('SBQQ__DiscountSchedule__c', CPQ_EXT_ID),
+    obj('SBQQ__ProductFeature__c', CPQ_EXT_ID),
+    obj('SBQQ__ProductRule__c', CPQ_EXT_ID, {
+      preImport: { deactivate: 'SBQQ__Active__c' },
+      postImport: { reactivate: 'SBQQ__Active__c' },
+    }),
+    obj('SBQQ__PriceRule__c', CPQ_EXT_ID, {
+      preImport: { deactivate: 'SBQQ__Active__c' },
+      postImport: { reactivate: 'SBQQ__Active__c' },
+    }),
+    obj('SBQQ__QuoteTemplate__c', CPQ_EXT_ID),
     obj('PricebookEntry', null, {
       filter: 'IsActive = true',
       compositeKey: {
@@ -32,35 +51,23 @@ export const CPQ_FULL: Recipe = {
         additionalMatchFields: ['CurrencyIsoCode'],
       },
     }),
-    obj('SBQQ__ProductFeature__c', CPQ_EXT_ID),
-    obj('SBQQ__PriceRule__c', CPQ_EXT_ID, {
-      preImport: { deactivate: 'SBQQ__Active__c' },
-      postImport: { reactivate: 'SBQQ__Active__c' },
-    }),
-    obj('SBQQ__ProductRule__c', CPQ_EXT_ID, {
-      preImport: { deactivate: 'SBQQ__Active__c' },
-      postImport: { reactivate: 'SBQQ__Active__c' },
-    }),
-    obj('SBQQ__DiscountSchedule__c', CPQ_EXT_ID),
-    obj('SBQQ__CustomAction__c', ATG_EXT_ID),
 
-    // Tier 2 — depends on rules, products, features
+    // Tier 2 — depends on rules, products, features, favorites, templates
     obj('SBQQ__ProductOption__c', CPQ_EXT_ID),
+    obj('SBQQ__OptionConstraint__c', ATG_EXT_ID),
+    obj('SBQQ__FavoriteProduct__c', null),
+    obj('SBQQ__TemplateSection__c', ATG_EXT_ID),
+    obj('SBQQ__ErrorCondition__c', ATG_EXT_ID),
+    obj('SBQQ__ConfigurationRule__c', ATG_EXT_ID),
     obj('SBQQ__PriceCondition__c', ATG_EXT_ID),
     obj('SBQQ__PriceAction__c', ATG_EXT_ID),
-    obj('SBQQ__ErrorCondition__c', ATG_EXT_ID),
-    obj('SBQQ__ProductAction__c', ATG_EXT_ID),
-    obj('SBQQ__ConfigurationRule__c', ATG_EXT_ID),
     obj('SBQQ__LookupQuery__c', ATG_EXT_ID),
-    obj('SBQQ__DiscountTier__c', ATG_EXT_ID),
-    obj('SBQQ__OptionConstraint__c', ATG_EXT_ID),
+    obj('SBQQ__ProductAction__c', ATG_EXT_ID),
     obj('SBQQ__CustomActionCondition__c', ATG_EXT_ID),
-
-    // Tier 3 — templates
-    obj('SBQQ__QuoteTemplate__c', CPQ_EXT_ID),
-    obj('SBQQ__TemplateContent__c', ATG_EXT_ID),
-    obj('SBQQ__TemplateSection__c', ATG_EXT_ID),
+    obj('SBQQ__DiscountTier__c', ATG_EXT_ID),
     obj('SBQQ__LineColumn__c', ATG_EXT_ID),
+
+    // Tier 3 — remaining templates
     obj('SBQQ__Theme__c', ATG_EXT_ID),
 
     // Tier 4 — approvals
@@ -74,7 +81,7 @@ export const CPQ_FULL: Recipe = {
     obj('sbaa__Approver__c', ATG_EXT_ID),
     obj('sbaa__EmailTemplate__c', ATG_EXT_ID),
 
-    // Tier 5 — custom junction
+    // Tier 5 — custom junctions
     obj('Approval_Rule_Product__c', CPQ_EXT_ID),
     obj('Product_Mapping__c', CPQ_EXT_ID),
   ],

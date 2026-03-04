@@ -4,7 +4,7 @@ import { SfCommand, Flags } from '@salesforce/sf-plugins-core';
 import { Connection, Org } from '@salesforce/core';
 import { BulkLoader } from '../../lib/import/bulk-loader.js';
 import { ImportTracker } from '../../lib/import/import-tracker.js';
-import { CsvPreprocessor, AutoNumberMappings, SfIdMappings } from '../../lib/import/csv-preprocessor.js';
+import { CsvPreprocessor, AutoNumberMappings, SfIdMappings, autoNumberKey, type PricebookEntrySplitResult } from '../../lib/import/csv-preprocessor.js';
 import { RetryHandler } from '../../lib/import/retry-handler.js';
 import { ExportManifest, ManifestFile, ImportLog, DeferredConditionsUpdate, BulkJobInfo } from '../../lib/types.js';
 import { parse } from 'csv-parse/sync';
@@ -129,6 +129,19 @@ export default class Import extends SfCommand<ImportLog> {
       this.spinner.start(`[${file.order}/${allFiles.length}] ${file.sobject} (${recordCount} records)`);
 
       try {
+        // Pricebook2: match by Name instead of inserting (standard pricebook can't be created)
+        if (file.sobject === 'Pricebook2') {
+          const pb2Match = await preprocessor.matchPricebook2ByName(csvContent);
+          for (let i = 0; i < pb2Match.sourceIds.length; i++) {
+            const src = pb2Match.sourceIds[i];
+            const tgt = pb2Match.targetIds[i];
+            if (src && tgt) sfIdMappings.set(src, tgt);
+          }
+          this.spinner.stop(`${pb2Match.matched} matched by Name, ${pb2Match.unmatched} unmatched`);
+          this.log(`  sf-id mapping: ${pb2Match.matched} source→target entries`);
+          continue;
+        }
+
         // Step 1: Sanitize Custom conditions (PriceRule, ProductRule)
         const condResult = preprocessor.sanitizeConditionsMet(csvContent, file.sobject, file.externalIdField);
         csvContent = condResult.csvContent;
@@ -154,23 +167,32 @@ export default class Import extends SfCommand<ImportLog> {
           this.log(`  deduped: removed ${dedup.duplicatesRemoved} duplicate rows`);
         }
 
-        // Step 4: Split by null ext ID and upload
-        const needsSplit = pp.externalIdField
-          && pp.externalIdField !== 'Id'
-          && pp.strategy === 'direct-upsert';
-
-        if (needsSplit) {
-          await this.loadSplitCsv(
-            file, dedup.csvContent, pp.externalIdField, loader, preprocessor,
-            tracker, retryHandler, resultsDir, autoNumberMappings, sfIdMappings,
-            pp.sourceIds, recordCount,
+        // Step 4: PricebookEntry special handling - standard entries must be loaded
+        // before custom entries (Salesforce requires a standard price to exist first)
+        if (file.sobject === 'PricebookEntry') {
+          await this.loadPricebookEntries(
+            file, dedup.csvContent, pp, loader, preprocessor,
+            tracker, retryHandler, resultsDir, sfIdMappings, recordCount,
           );
         } else {
-          await this.loadSingleCsv(
-            file, dedup.csvContent, pp, loader, preprocessor,
-            tracker, retryHandler, resultsDir, autoNumberMappings, sfIdMappings,
-            recordCount,
-          );
+          // Step 5: Split by null ext ID and upload
+          const needsSplit = pp.externalIdField
+            && pp.externalIdField !== 'Id'
+            && pp.strategy === 'direct-upsert';
+
+          if (needsSplit) {
+            await this.loadSplitCsv(
+              file, dedup.csvContent, pp.externalIdField, loader, preprocessor,
+              tracker, retryHandler, resultsDir, autoNumberMappings, sfIdMappings,
+              pp.sourceIds, recordCount,
+            );
+          } else {
+            await this.loadSingleCsv(
+              file, dedup.csvContent, pp, loader, preprocessor,
+              tracker, retryHandler, resultsDir, autoNumberMappings, sfIdMappings,
+              recordCount,
+            );
+          }
         }
 
         const lastEntry = tracker.getEntries().at(-1);
@@ -401,9 +423,10 @@ export default class Import extends SfCommand<ImportLog> {
         file.sobject, file.externalIdField, pp.sourceExtIds, successCsv,
       );
       if (objMapping.size > 0) {
-        const existing = autoNumberMappings.get(file.externalIdField) ?? new Map();
+        const key = autoNumberKey(file.sobject, file.externalIdField);
+        const existing = autoNumberMappings.get(key) ?? new Map();
         for (const [src, tgt] of objMapping) existing.set(src, tgt);
-        autoNumberMappings.set(file.externalIdField, existing);
+        autoNumberMappings.set(key, existing);
         this.log(`  auto-number mapping: ${objMapping.size} source→target entries`);
       }
     }
@@ -435,6 +458,82 @@ export default class Import extends SfCommand<ImportLog> {
     }
     tracker.saveResultCsv(resultsDir, `${tag}_success.csv`, successCsv);
     this.saveAdminFailureCsv(resultsDir, `${tag}_failed.csv`, failedCsv);
+  }
+
+  /**
+   * Load PricebookEntry in two passes: standard pricebook entries first,
+   * then custom. Salesforce requires a standard price to exist before
+   * creating a custom price for the same product.
+   */
+  private async loadPricebookEntries(
+    file: ManifestFile,
+    csvContent: string,
+    pp: { externalIdField: string; strategy: string; sourceExtIds: string[]; sourceIds: string[] },
+    loader: BulkLoader,
+    preprocessor: CsvPreprocessor,
+    tracker: ImportTracker,
+    retryHandler: RetryHandler,
+    resultsDir: string,
+    sfIdMappings: SfIdMappings,
+    recordCount: number,
+  ): Promise<void> {
+    const pbeSplit = await preprocessor.splitPricebookEntries(csvContent, sfIdMappings);
+    const tag = basename(file.filename, '.csv');
+
+    const loadBatch = async (batchCsv: string, batchCount: number, label: string): Promise<void> => {
+      if (batchCount === 0) return;
+      this.log(`  ${label}: ${batchCount} entries`);
+      const { jobId, info } = await loader.runUpsert(file.sobject, pp.externalIdField, batchCsv);
+      const successCsv = await loader.getSuccessResults(jobId);
+      let failedCsv = await loader.getFailedResults(jobId);
+
+      const retryResult = await this.retryIfNeeded(
+        retryHandler, file.sobject, pp.externalIdField, failedCsv, info, `${tag}_${label}`,
+      );
+      if (retryResult) failedCsv = retryResult.permanentFailureCsv;
+
+      // Build SF ID mapping from results
+      if (pp.sourceIds.length > 0) {
+        const idMapped = this.buildSfIdMapping(pp.sourceIds, successCsv, info);
+        if (idMapped > 0) {
+          for (const [src, tgt] of this.lastSfIdBatch) sfIdMappings.set(src, tgt);
+        }
+      }
+
+      tracker.addResult(
+        file.order, file.sobject, file.externalIdField, file.filename,
+        batchCount, jobId, info, successCsv,
+      );
+      if (retryResult && retryResult.recoveredSfIds.length > 0) {
+        tracker.appendSfIds(retryResult.recoveredSfIds);
+      }
+      tracker.saveResultCsv(resultsDir, `${tag}_${label}_success.csv`, successCsv);
+      this.saveAdminFailureCsv(resultsDir, `${tag}_${label}_failed.csv`, failedCsv);
+    };
+
+    if (pbeSplit.standardCount > 0 && pbeSplit.customCount > 0) {
+      this.log(`  split: ${pbeSplit.standardCount} standard + ${pbeSplit.customCount} custom`);
+      await loadBatch(pbeSplit.standardCsv, pbeSplit.standardCount, 'standard');
+      await loadBatch(pbeSplit.customCsv, pbeSplit.customCount, 'custom');
+    } else {
+      // All entries are for the same pricebook type — load in one batch
+      const { jobId, info } = await loader.runUpsert(file.sobject, pp.externalIdField, csvContent);
+      const successCsv = await loader.getSuccessResults(jobId);
+      let failedCsv = await loader.getFailedResults(jobId);
+      const retryResult = await this.retryIfNeeded(
+        retryHandler, file.sobject, pp.externalIdField, failedCsv, info, tag,
+      );
+      if (retryResult) failedCsv = retryResult.permanentFailureCsv;
+      tracker.addResult(
+        file.order, file.sobject, file.externalIdField, file.filename,
+        recordCount, jobId, info, successCsv,
+      );
+      if (retryResult && retryResult.recoveredSfIds.length > 0) {
+        tracker.appendSfIds(retryResult.recoveredSfIds);
+      }
+      tracker.saveResultCsv(resultsDir, `${tag}_success.csv`, successCsv);
+      this.saveAdminFailureCsv(resultsDir, `${tag}_failed.csv`, failedCsv);
+    }
   }
 
   /**
@@ -500,7 +599,7 @@ export default class Import extends SfCommand<ImportLog> {
       );
 
       // Resolve source ext IDs → target ext IDs using auto-number mappings
-      const mapping = autoNumberMappings.get(externalIdField);
+      const mapping = autoNumberMappings.get(autoNumberKey(sobject, externalIdField));
       const targetExtIds: string[] = objUpdates.map((u) =>
         mapping?.get(u.sourceExtId) ?? u.sourceExtId,
       );

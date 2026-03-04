@@ -1,15 +1,15 @@
 {
-  "name": "CPQ Full Configuration",
+  "name": "CPQ Full Configuration (Production)",
   "version": "2.0",
-  "description": "All CPQ configuration objects for sandbox seeding — products, pricing, rules, templates, approvals, favorites, scripts.",
+  "description": "All CPQ configuration objects — adapted for Production where ATGExternalID__c is not deployed. Uses CPQ_External_ID__c where available, null (insert-only with SF ID mapping) elsewhere.",
   "objects": [
     {
       "sobject": "SBQQ__BlockPrice__c",
-      "externalIdField": "ATGExternalID__c"
+      "externalIdField": null
     },
     {
       "sobject": "SBQQ__CustomScript__c",
-      "externalIdField": "ATGExternalID__c"
+      "externalIdField": null
     },
     {
       "sobject": "SBQQ__Favorite__c",
@@ -21,7 +21,7 @@
     },
     {
       "sobject": "SBQQ__SearchFilter__c",
-      "externalIdField": "ATGExternalID__c"
+      "externalIdField": null
     },
     {
       "sobject": "SBQQ__SummaryVariable__c",
@@ -29,7 +29,7 @@
     },
     {
       "sobject": "SBQQ__TemplateContent__c",
-      "externalIdField": "ATGExternalID__c"
+      "externalIdField": null
     },
     {
       "sobject": "Product2",
@@ -42,15 +42,15 @@
     },
     {
       "sobject": "SBQQ__Cost__c",
-      "externalIdField": "ATGExternalID__c"
+      "externalIdField": null
     },
     {
       "sobject": "SBQQ__CustomAction__c",
-      "externalIdField": "ATGExternalID__c"
+      "externalIdField": null
     },
     {
       "sobject": "SBQQ__DiscountSchedule__c",
-      "externalIdField": "CPQ_External_ID__c"
+      "externalIdField": null
     },
     {
       "sobject": "SBQQ__ProductFeature__c",
@@ -78,7 +78,7 @@
     },
     {
       "sobject": "SBQQ__QuoteTemplate__c",
-      "externalIdField": "CPQ_External_ID__c"
+      "externalIdField": null
     },
     {
       "sobject": "PricebookEntry",
@@ -107,7 +107,7 @@
     },
     {
       "sobject": "SBQQ__OptionConstraint__c",
-      "externalIdField": "ATGExternalID__c"
+      "externalIdField": null
     },
     {
       "sobject": "SBQQ__FavoriteProduct__c",
@@ -115,47 +115,47 @@
     },
     {
       "sobject": "SBQQ__TemplateSection__c",
-      "externalIdField": "ATGExternalID__c"
+      "externalIdField": null
     },
     {
       "sobject": "SBQQ__ErrorCondition__c",
-      "externalIdField": "ATGExternalID__c"
+      "externalIdField": "CPQ_External_ID__c"
     },
     {
       "sobject": "SBQQ__ConfigurationRule__c",
-      "externalIdField": "ATGExternalID__c"
+      "externalIdField": null
     },
     {
       "sobject": "SBQQ__PriceCondition__c",
-      "externalIdField": "ATGExternalID__c"
+      "externalIdField": "CPQ_External_ID__c"
     },
     {
       "sobject": "SBQQ__PriceAction__c",
-      "externalIdField": "ATGExternalID__c"
+      "externalIdField": "CPQ_External_ID__c"
     },
     {
       "sobject": "SBQQ__LookupQuery__c",
-      "externalIdField": "ATGExternalID__c"
+      "externalIdField": null
     },
     {
       "sobject": "SBQQ__ProductAction__c",
-      "externalIdField": "ATGExternalID__c"
+      "externalIdField": null
     },
     {
       "sobject": "SBQQ__CustomActionCondition__c",
-      "externalIdField": "ATGExternalID__c"
+      "externalIdField": null
     },
     {
       "sobject": "SBQQ__DiscountTier__c",
-      "externalIdField": "ATGExternalID__c"
+      "externalIdField": null
     },
     {
       "sobject": "SBQQ__LineColumn__c",
-      "externalIdField": "ATGExternalID__c"
+      "externalIdField": null
     },
     {
       "sobject": "SBQQ__Theme__c",
-      "externalIdField": "ATGExternalID__c"
+      "externalIdField": null
     },
     {
       "sobject": "sbaa__ApprovalRule__c",
@@ -169,31 +169,27 @@
     },
     {
       "sobject": "sbaa__ApprovalCondition__c",
-      "externalIdField": "ATGExternalID__c"
+      "externalIdField": "CPQ_External_ID__c"
     },
     {
       "sobject": "sbaa__ApprovalVariable__c",
-      "externalIdField": "ATGExternalID__c"
+      "externalIdField": null
     },
     {
       "sobject": "sbaa__ApprovalChain__c",
-      "externalIdField": "ATGExternalID__c"
+      "externalIdField": "CPQ_External_ID__c"
     },
     {
       "sobject": "sbaa__Approver__c",
-      "externalIdField": "ATGExternalID__c"
+      "externalIdField": null
     },
     {
       "sobject": "sbaa__EmailTemplate__c",
-      "externalIdField": "ATGExternalID__c"
-    },
-    {
-      "sobject": "Approval_Rule_Product__c",
-      "externalIdField": "CPQ_External_ID__c"
+      "externalIdField": null
     },
     {
       "sobject": "Product_Mapping__c",
-      "externalIdField": "CPQ_External_ID__c"
+      "externalIdField": null
     }
   ],
   "settings": {

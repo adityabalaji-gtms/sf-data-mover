@@ -9,7 +9,7 @@ const ALWAYS_EXCLUDE = new Set([
 
 /**
  * Builds SOQL queries from recipe + schema metadata.
- * Automatically excludes formula fields, system fields, and non-createable fields.
+ * Automatically excludes formula fields, system fields, and compound fields.
  */
 export class QueryBuilder {
   buildQuery(
@@ -29,7 +29,9 @@ export class QueryBuilder {
 
   /**
    * Returns the list of field API names to query.
-   * Includes Id (needed for ID map building) and all createable/updateable non-formula fields.
+   * Includes Id and all non-formula, non-compound fields. Uses a permissive
+   * filter (readable, not just createable) so exports work from orgs where
+   * the user has read-only FLS on managed package fields.
    */
   selectFields(
     recipeObj: RecipeObject,
@@ -68,7 +70,6 @@ export class QueryBuilder {
       if (f.calculated && f.type !== 'reference') continue;
       if (FORMULA_TYPES.has(f.type)) continue;
       if (f.autoNumber) continue;
-      if (!f.createable && !f.updateable && f.type !== 'reference') continue;
 
       fields.push(f.name);
     }

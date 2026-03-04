@@ -33,8 +33,23 @@ export interface SplitResult {
   withoutExtIdCount: number;
 }
 
-/** Accumulated mapping of source auto-number → target auto-number, keyed by external ID field name */
+export interface PricebookEntrySplitResult {
+  standardCsv: string;
+  customCsv: string;
+  standardCount: number;
+  customCount: number;
+}
+
+/**
+ * Accumulated mapping of source auto-number → target auto-number.
+ * Keyed by "sobject\0extIdField" to prevent cross-object collisions when
+ * different objects share the same auto-number field name (e.g., CPQ_External_ID__c).
+ */
 export type AutoNumberMappings = Map<string, Map<string, string>>;
+
+export function autoNumberKey(sobject: string, extIdField: string): string {
+  return `${sobject}\0${extIdField}`;
+}
 
 /** Accumulated mapping of source Salesforce ID → target Salesforce ID (cross-org record mapping) */
 export type SfIdMappings = Map<string, string>;
@@ -115,7 +130,7 @@ export class CsvPreprocessor {
 
     // Step 2: Rewrite relationship columns using accumulated auto-number mappings
     if (autoNumberMappings && autoNumberMappings.size > 0) {
-      records = this.rewriteRelationshipColumns(records, headers, autoNumberMappings);
+      records = await this.rewriteRelationshipColumns(records, headers, sobject, autoNumberMappings);
     }
 
     // Step 3: Resolve raw reference fields using SF ID mappings
@@ -454,6 +469,122 @@ export class CsvPreprocessor {
   }
 
   /**
+   * Match Pricebook2 records by Name instead of inserting.
+   * The standard pricebook always exists and cannot be created, so we need
+   * to match source pricebooks to target pricebooks by Name and build the
+   * sfIdMappings for downstream PricebookEntry resolution.
+   */
+  async matchPricebook2ByName(
+    csvContent: string,
+  ): Promise<{ matched: number; unmatched: number; sourceIds: string[]; targetIds: string[] }> {
+    const clean = csvContent.charCodeAt(0) === 0xfeff ? csvContent.slice(1) : csvContent;
+    const records = parse(clean, {
+      columns: true,
+      skip_empty_lines: true,
+      relax_quotes: true,
+      relax_column_count: true,
+    }) as Record<string, string>[];
+
+    if (records.length === 0) {
+      return { matched: 0, unmatched: 0, sourceIds: [], targetIds: [] };
+    }
+
+    // Extract __sourceId before it's removed
+    const sourceIds: string[] = [];
+    const headers = Object.keys(records[0]);
+    if (headers.includes('__sourceId')) {
+      for (const rec of records) {
+        sourceIds.push(rec['__sourceId'] ?? '');
+      }
+    }
+
+    // Query target pricebooks by name
+    const targetResult = await this.conn.query<{ Id: string; Name: string }>(
+      'SELECT Id, Name FROM Pricebook2',
+    );
+    const targetByName = new Map<string, string>();
+    for (const rec of targetResult.records) {
+      targetByName.set(rec.Name, rec.Id);
+    }
+
+    const targetIds: string[] = [];
+    let matched = 0;
+    let unmatched = 0;
+    for (let i = 0; i < records.length; i++) {
+      const name = records[i]['Name'] ?? '';
+      const targetId = targetByName.get(name);
+      if (targetId) {
+        targetIds.push(targetId);
+        matched++;
+      } else {
+        targetIds.push('');
+        unmatched++;
+      }
+    }
+
+    return { matched, unmatched, sourceIds, targetIds };
+  }
+
+  /**
+   * Split PricebookEntry CSV into standard and custom pricebook entries.
+   * Standard entries must be loaded first (Salesforce requires a standard price
+   * to exist before a custom price can be created for the same product).
+   */
+  async splitPricebookEntries(csvContent: string, sfIdMappings: SfIdMappings): Promise<PricebookEntrySplitResult> {
+    const clean = csvContent.charCodeAt(0) === 0xfeff ? csvContent.slice(1) : csvContent;
+    const records = parse(clean, {
+      columns: true,
+      skip_empty_lines: true,
+      relax_quotes: true,
+      relax_column_count: true,
+    }) as Record<string, string>[];
+
+    if (records.length === 0) {
+      return { standardCsv: csvContent, customCsv: '', standardCount: 0, customCount: 0 };
+    }
+
+    // Query target for standard pricebook IDs
+    const result = await this.conn.query<{ Id: string }>('SELECT Id FROM Pricebook2 WHERE IsStandard = true');
+    const standardPbIds = new Set(result.records.map((r) => r.Id));
+
+    // Also include source-org standard pricebook IDs that map to target standard pricebooks
+    for (const [srcId, tgtId] of sfIdMappings) {
+      if (standardPbIds.has(tgtId)) {
+        standardPbIds.add(srcId);
+      }
+    }
+
+    const headers = Object.keys(records[0]);
+    const pb2Col = headers.find((h) => h === 'Pricebook2Id');
+    if (!pb2Col) {
+      return { standardCsv: csvContent, customCsv: '', standardCount: records.length, customCount: 0 };
+    }
+
+    const standardRecs: Record<string, string>[] = [];
+    const customRecs: Record<string, string>[] = [];
+    for (const rec of records) {
+      if (standardPbIds.has(rec[pb2Col])) {
+        standardRecs.push(rec);
+      } else {
+        customRecs.push(rec);
+      }
+    }
+
+    const buildCsv = (recs: Record<string, string>[]) => {
+      if (recs.length === 0) return '';
+      const rows = recs.map((rec) => headers.map((h) => rec[h] ?? ''));
+      return stringify([headers, ...rows]);
+    };
+
+    return {
+      standardCsv: buildCsv(standardRecs),
+      customCsv: buildCsv(customRecs),
+      standardCount: standardRecs.length,
+      customCount: customRecs.length,
+    };
+  }
+
+  /**
    * Resolve raw Salesforce ID reference fields using the accumulated SF ID mappings.
    *
    * Only processes columns that are ACTUAL reference/lookup fields per the schema
@@ -486,7 +617,15 @@ export class CsvPreprocessor {
       const sample = records.find((r) => r[h] && SFID_PATTERN.test(r[h]));
       if (!sample) continue;
 
-      const relPrefix = h.replace(/__c$/, '__r.');
+      // Derive relationship prefix: custom fields (__c → __r.), standard fields (Id suffix → .)
+      let relPrefix: string;
+      if (h.endsWith('__c')) {
+        relPrefix = h.replace(/__c$/, '__r.');
+      } else if (h.endsWith('Id')) {
+        relPrefix = h.slice(0, -2) + '.';
+      } else {
+        relPrefix = h + '.';
+      }
       const relCols = headers.filter((rh) => rh.startsWith(relPrefix));
 
       refColumns.push({ directCol: h, relCols });
@@ -525,21 +664,37 @@ export class CsvPreprocessor {
 
   /**
    * Rewrite values in relationship columns (e.g., SBQQ__Rule__r.CPQ_External_ID__c)
-   * using accumulated auto-number mappings.
+   * using accumulated auto-number mappings. Resolves each relationship column to its
+   * target object via the describe cache to use the correct per-object mapping.
    */
-  private rewriteRelationshipColumns(
+  private async rewriteRelationshipColumns(
     records: Record<string, string>[],
     headers: string[],
+    sobject: string,
     mappings: AutoNumberMappings,
-  ): Record<string, string>[] {
-    // Find relationship columns: headers containing '.' (e.g., SBQQ__Rule__r.CPQ_External_ID__c)
-    const relColumns: { header: string; extIdField: string }[] = [];
+  ): Promise<Record<string, string>[]> {
+    const fields = await this.getFieldDescribes(sobject);
+    const relNameToTarget = new Map<string, string>();
+    for (const f of fields) {
+      if (f.type === 'reference' && f.referenceTo.length > 0) {
+        const relName = f.name.endsWith('__c')
+          ? f.name.replace(/__c$/, '__r')
+          : f.name.replace(/Id$/, '');
+        relNameToTarget.set(relName, f.referenceTo[0]);
+      }
+    }
+
+    const relColumns: { header: string; mappingKey: string }[] = [];
     for (const h of headers) {
       const dotIdx = h.indexOf('.');
       if (dotIdx === -1) continue;
+      const relName = h.substring(0, dotIdx);
       const extIdField = h.substring(dotIdx + 1);
-      if (mappings.has(extIdField)) {
-        relColumns.push({ header: h, extIdField });
+      const targetObj = relNameToTarget.get(relName);
+      if (!targetObj) continue;
+      const key = autoNumberKey(targetObj, extIdField);
+      if (mappings.has(key)) {
+        relColumns.push({ header: h, mappingKey: key });
       }
     }
 
@@ -547,10 +702,10 @@ export class CsvPreprocessor {
 
     return records.map((rec) => {
       const newRec = { ...rec };
-      for (const { header, extIdField } of relColumns) {
+      for (const { header, mappingKey } of relColumns) {
         const val = newRec[header];
         if (!val) continue;
-        const fieldMapping = mappings.get(extIdField)!;
+        const fieldMapping = mappings.get(mappingKey)!;
         const mapped = fieldMapping.get(val);
         if (mapped) {
           newRec[header] = mapped;
@@ -563,6 +718,8 @@ export class CsvPreprocessor {
   /**
    * Identify columns to strip from the CSV:
    * - OwnerId, CreatedById, LastModifiedById (always strip)
+   * - Columns that don't exist on the target object (schema mismatch between orgs)
+   * - Non-createable/non-updateable columns on the target (read-only FLS)
    * - Reference fields containing raw Salesforce IDs that haven't been resolved
    *   by sfIdMappings (still contain source-org IDs that won't work cross-org)
    */
@@ -586,8 +743,20 @@ export class CsvPreprocessor {
       }
 
       const fieldDesc = fieldMap.get(h);
-      if (fieldDesc && fieldDesc.type === 'reference' && fieldDesc.referenceTo.length > 0) {
-        // Don't strip columns that were already resolved to target-org IDs
+
+      // Strip columns that don't exist on the target object
+      if (!fieldDesc) {
+        toStrip.push(h);
+        continue;
+      }
+
+      // Strip non-createable AND non-updateable fields (read-only on target)
+      if (!fieldDesc.createable && !fieldDesc.updateable && fieldDesc.type !== 'reference') {
+        toStrip.push(h);
+        continue;
+      }
+
+      if (fieldDesc.type === 'reference' && fieldDesc.referenceTo.length > 0) {
         if (this.resolvedRefColumns.has(h)) continue;
         toStrip.push(h);
       }
@@ -612,8 +781,8 @@ export class CsvPreprocessor {
   ): Promise<PreprocessResult> {
     const targetMap = await this.buildTargetIdMap(sobject, externalIdField);
 
-    // Source→target ext ID mapping for this field (built from previous pass imports)
-    const extIdMapping = autoNumberMappings?.get(externalIdField);
+    // Source→target ext ID mapping for THIS object (built from previous pass imports)
+    const extIdMapping = autoNumberMappings?.get(autoNumberKey(sobject, externalIdField));
 
     // Collect all columns to remove: ext ID field + additional strips
     const allStrip = new Set([externalIdField, ...additionalColumnsToStrip]);
