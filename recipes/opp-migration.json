@@ -1,0 +1,117 @@
+{
+  "name": "Opportunity Migration (Closed Won)",
+  "version": "1.2",
+  "description": "Migrate recent Closed Won Opportunities and all related records (Account, Contact, Shipping Address, Quote, QuoteLines, OLIs, Contract, Order, DocuSign) from Production to sandbox orgs. Uses selective export with --select-object Opportunity. Includes resolveOnly objects for cross-org lookup resolution.",
+  "objects": [
+    {
+      "sobject": "Product2",
+      "externalIdField": "CPQ_External_ID__c",
+      "resolveOnly": true
+    },
+    {
+      "sobject": "SBQQ__ProductOption__c",
+      "externalIdField": "CPQ_External_ID__c",
+      "resolveOnly": true
+    },
+    {
+      "sobject": "Account",
+      "externalIdField": "Netsuite_Id__c",
+      "excludeFields": [
+        "Billing_Contact__c",
+        "Insurance_Contact__c",
+        "Key_Stakeholder_for_CSM__c",
+        "Primary_Champion__c",
+        "Latest_Active_Contract__c",
+        "First_Purchase_Opportunity__c",
+        "SBQQ__DefaultOpportunity__c",
+        "IsCustomerPortal",
+        "IsPartner",
+        "Upsell_Opportunity_Products__c"
+      ]
+    },
+    {
+      "sobject": "Contact",
+      "externalIdField": "netsuite_conn__NetSuite_Id__c",
+      "excludeFields": [
+        "Lead_Funnel_Sync_Id__c",
+        "TILBP__TIID__c"
+      ]
+    },
+    {
+      "sobject": "Shipping_Address__c",
+      "externalIdField": "NS_Address_Internal_ID__c",
+      "excludeFields": [
+        "Shipping_Contact__c"
+      ]
+    },
+    {
+      "sobject": "Opportunity",
+      "externalIdField": "Netsuite_Id__c",
+      "excludeFields": [
+        "SBQQ__PrimaryQuote__c",
+        "ContractId",
+        "ContactId",
+        "Shipping_Contact__c",
+        "SBQQ__AmendedContract__c",
+        "SBQQ__RenewedContract__c"
+      ]
+    },
+    {
+      "sobject": "SBQQ__Quote__c",
+      "externalIdField": null,
+      "excludeFields": [
+        "Bill_to_Contact__c",
+        "SBQQ__PrimaryContact__c"
+      ]
+    },
+    {
+      "sobject": "SBQQ__QuoteLine__c",
+      "externalIdField": null
+    },
+    {
+      "sobject": "OpportunityLineItem",
+      "externalIdField": "OpportunityLineItem_External_ID__c",
+      "excludeFields": [
+        "TotalPrice"
+      ]
+    },
+    {
+      "sobject": "Contract",
+      "externalIdField": "netsuite_conn__NetSuite_Id__c",
+      "excludeFields": [
+        "ActivatedDate",
+        "ActivatedById"
+      ]
+    },
+    {
+      "sobject": "Order",
+      "externalIdField": "netsuite_conn__NetSuite_Id__c",
+      "excludeFields": [
+        "StatusCode",
+        "ActivatedDate",
+        "ActivatedById"
+      ]
+    },
+    {
+      "sobject": "dsfs__DocuSign_Status__c",
+      "externalIdField": null
+    },
+    {
+      "sobject": "dsfs__DocuSign_Envelope__c",
+      "externalIdField": null
+    }
+  ],
+  "settings": {
+    "defaultExcludeFields": [
+      "Id",
+      "IsDeleted",
+      "CreatedDate",
+      "CreatedById",
+      "LastModifiedDate",
+      "LastModifiedById",
+      "SystemModstamp"
+    ],
+    "batchSize": 200,
+    "selfReferenceStrategy": "two-pass"
+  }
+}

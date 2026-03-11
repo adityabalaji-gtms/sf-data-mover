@@ -219,6 +219,11 @@ export class RuleFilter {
     const filteredObjects: RecipeObject[] = [];
 
     for (const obj of this.recipe.objects) {
+      if (obj.resolveOnly) {
+        filteredObjects.push({ ...obj });
+        continue;
+      }
+
       const ids = this.selectedIds.get(obj.sobject);
       if (!ids || ids.size === 0) continue;
 
@@ -247,6 +252,11 @@ export class RuleFilter {
     const filteredObjects: RecipeObject[] = [];
 
     for (const obj of this.recipe.objects) {
+      if (obj.resolveOnly) {
+        filteredObjects.push({ ...obj });
+        continue;
+      }
+
       const ids = this.selectedIds.get(obj.sobject);
       if (!ids || ids.size === 0) continue;
 

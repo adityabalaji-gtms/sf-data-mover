@@ -49,6 +49,10 @@ export default class Import extends SfCommand<ImportLog> {
       min: 0,
       max: 5,
     }),
+    'mask-emails': Flags.boolean({
+      summary: 'Append .invalid to all email field values to prevent outbound emails from sandbox.',
+      default: false,
+    }),
   };
 
   public async run(): Promise<ImportLog> {
@@ -56,6 +60,7 @@ export default class Import extends SfCommand<ImportLog> {
     const exportDir = resolve(flags['export-dir']);
     const dryRun = flags['dry-run'];
     const continueOnError = flags['continue-on-error'];
+    const maskEmails = flags['mask-emails'];
 
     // 1. Read manifest
     const manifestPath = resolve(exportDir, '_manifest.json');
@@ -85,6 +90,10 @@ export default class Import extends SfCommand<ImportLog> {
     }
 
     const maxRetries = flags['max-retries'];
+    this.shouldMaskEmails = maskEmails;
+    if (maskEmails) {
+      this.log('Email masking enabled: .invalid suffix will be appended to all email field values.\n');
+    }
     const loader = new BulkLoader(conn);
     const preprocessor = new CsvPreprocessor(conn);
     const retryHandler = new RetryHandler(loader, maxRetries);
@@ -166,6 +175,9 @@ export default class Import extends SfCommand<ImportLog> {
         if (dedup.duplicatesRemoved > 0) {
           this.log(`  deduped: removed ${dedup.duplicatesRemoved} duplicate rows`);
         }
+
+        // Step 3.5: Mask email fields if enabled
+        dedup.csvContent = await this.applyEmailMasking(dedup.csvContent, file.sobject, preprocessor);
 
         // Step 4: PricebookEntry special handling - standard entries must be loaded
         // before custom entries (Salesforce requires a standard price to exist first)
@@ -655,6 +667,26 @@ export default class Import extends SfCommand<ImportLog> {
         this.spinner.stop(`${matched} rules restored to Custom`);
       }
     }
+  }
+
+  /** Whether to mask email fields with .invalid suffix */
+  private shouldMaskEmails = false;
+
+  /**
+   * Mask email fields in a CSV if --mask-emails is enabled.
+   * Returns the (possibly modified) CSV content.
+   */
+  private async applyEmailMasking(
+    csvContent: string,
+    sobject: string,
+    preprocessor: CsvPreprocessor,
+  ): Promise<string> {
+    if (!this.shouldMaskEmails) return csvContent;
+    const result = await preprocessor.maskEmails(csvContent, sobject);
+    if (result.maskedValueCount > 0) {
+      this.log(`  email-mask: ${result.maskedValueCount} values across ${result.maskedColumns.length} fields (${result.maskedColumns.join(', ')})`);
+    }
+    return result.csvContent;
   }
 
   /** Temporary storage for the last buildSfIdMapping call results */

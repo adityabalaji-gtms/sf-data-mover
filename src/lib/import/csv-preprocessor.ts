@@ -3,6 +3,12 @@ import { parse } from 'csv-parse/sync';
 import { stringify } from 'csv-stringify/sync';
 import { DeferredConditionsUpdate } from '../types.js';
 
+export interface MaskEmailsResult {
+  csvContent: string;
+  maskedColumns: string[];
+  maskedValueCount: number;
+}
+
 export interface PreprocessResult {
   csvContent: string;
   externalIdField: string;
@@ -67,7 +73,7 @@ const ALWAYS_STRIP = new Set(['OwnerId', 'CreatedById', 'LastModifiedById']);
  * - Rewriting relationship columns using accumulated auto-number mappings
  */
 export class CsvPreprocessor {
-  private describeCache = new Map<string, { name: string; type: string; referenceTo: string[]; createable: boolean; updateable: boolean; autoNumber: boolean }[]>();
+  private describeCache = new Map<string, { name: string; type: string; referenceTo: string[]; createable: boolean; updateable: boolean; autoNumber: boolean; relationshipName?: string | null }[]>();
 
   constructor(private conn: Connection) {}
 
@@ -139,7 +145,7 @@ export class CsvPreprocessor {
     }
 
     // Step 4: Identify columns to strip (raw IDs that couldn't be resolved)
-    const columnsToStrip = await this.identifyColumnsToStrip(sobject, headers, externalIdField);
+    const columnsToStrip = await this.identifyColumnsToStrip(sobject, headers, externalIdField, records);
 
     // Step 5: Handle external ID field writability
     if (externalIdField) {
@@ -585,6 +591,96 @@ export class CsvPreprocessor {
   }
 
   /**
+   * Mask email values in a CSV by appending ".invalid" to prevent outbound emails
+   * from sandbox environments.
+   *
+   * Detection strategy (union of all three):
+   * 1. Schema-typed: fields with Salesforce type 'email'
+   * 2. Name heuristic: field names containing "email" (case-insensitive)
+   * 3. Pattern scan: remaining text/string fields where >50% of non-blank values
+   *    match an email regex (catches fields like TILBP__TI_externalCustomerId__c)
+   *
+   * Only masks values that look like valid emails and don't already end with .invalid.
+   */
+  async maskEmails(csvContent: string, sobject: string): Promise<MaskEmailsResult> {
+    const SUFFIX = '.invalid';
+    const EMAIL_RE = /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/;
+
+    const clean = csvContent.charCodeAt(0) === 0xfeff ? csvContent.slice(1) : csvContent;
+    const records = parse(clean, {
+      columns: true,
+      skip_empty_lines: true,
+      relax_quotes: true,
+      relax_column_count: true,
+    }) as Record<string, string>[];
+
+    if (records.length === 0) {
+      return { csvContent, maskedColumns: [], maskedValueCount: 0 };
+    }
+
+    const headers = Object.keys(records[0]);
+    const fields = await this.getFieldDescribes(sobject);
+    const fieldMap = new Map(fields.map((f) => [f.name, f]));
+
+    // Build set of columns to mask
+    const emailColumns = new Set<string>();
+
+    for (const h of headers) {
+      if (h.includes('.') || h === 'Id' || h === '__sourceId') continue;
+
+      const desc = fieldMap.get(h);
+
+      // Strategy 1: schema type === 'email'
+      if (desc?.type === 'email') {
+        emailColumns.add(h);
+        continue;
+      }
+
+      // Strategy 2: field name contains "email" (case-insensitive)
+      if (h.toLowerCase().includes('email')) {
+        emailColumns.add(h);
+        continue;
+      }
+
+      // Strategy 3: pattern scan for string/textarea fields
+      if (desc && (desc.type === 'string' || desc.type === 'textarea')) {
+        const nonBlank = records.filter((r) => (r[h] ?? '').trim() !== '');
+        if (nonBlank.length > 0) {
+          const emailCount = nonBlank.filter((r) => EMAIL_RE.test(r[h].trim())).length;
+          if (emailCount / nonBlank.length > 0.5) {
+            emailColumns.add(h);
+          }
+        }
+      }
+    }
+
+    if (emailColumns.size === 0) {
+      return { csvContent, maskedColumns: [], maskedValueCount: 0 };
+    }
+
+    // Mask values
+    let maskedCount = 0;
+    for (const rec of records) {
+      for (const col of emailColumns) {
+        const val = (rec[col] ?? '').trim();
+        if (val && EMAIL_RE.test(val) && !val.endsWith(SUFFIX)) {
+          rec[col] = val + SUFFIX;
+          maskedCount++;
+        }
+      }
+    }
+
+    const rows = records.map((rec) => headers.map((h) => rec[h] ?? ''));
+    const output = stringify([headers, ...rows]);
+
+    return {
+      csvContent: output,
+      maskedColumns: [...emailColumns].sort(),
+      maskedValueCount: maskedCount,
+    };
+  }
+
+  /**
    * Resolve raw Salesforce ID reference fields using the accumulated SF ID mappings.
    *
    * Only processes columns that are ACTUAL reference/lookup fields per the schema
@@ -727,6 +823,7 @@ export class CsvPreprocessor {
     sobject: string,
     headers: string[],
     externalIdField: string | null,
+    records: Record<string, string>[],
   ): Promise<string[]> {
     const toStrip: string[] = [];
     const fields = await this.getFieldDescribes(sobject);
@@ -762,7 +859,43 @@ export class CsvPreprocessor {
       }
     }
 
+    // When stripping a raw reference column (e.g. Billing_Contact__c), also
+    // strip its relationship header — UNLESS the relationship column has
+    // non-blank values from export-time resolution. Those values are valid
+    // cross-org external ID references the Bulk API can resolve.
+    const stripSet = new Set(toStrip);
+    for (const h of headers) {
+      if (!h.includes('.')) continue;
+      const relName = h.split('.')[0];
+      const rawField = this.relationshipToFieldName(relName, fieldMap);
+      if (rawField && stripSet.has(rawField)) {
+        const hasValue = records.some((r) => (r[h] ?? '').trim() !== '');
+        if (!hasValue) {
+          toStrip.push(h);
+        }
+      }
+    }
+
     return toStrip;
+  }
+
+  /**
+   * Map a relationship name (e.g. "Billing_Contact__r" or "Account") back to
+   * the raw field API name (e.g. "Billing_Contact__c" or "AccountId").
+   */
+  private relationshipToFieldName(
+    relName: string,
+    fieldMap: Map<string, { name: string; relationshipName?: string | null }>,
+  ): string | null {
+    for (const [name, desc] of fieldMap) {
+      if (desc.relationshipName === relName) return name;
+    }
+    // Convention fallback: CustomField__r -> CustomField__c, StandardField -> StandardFieldId
+    const customGuess = relName.replace(/__r$/, '__c');
+    if (fieldMap.has(customGuess)) return customGuess;
+    const stdGuess = relName + 'Id';
+    if (fieldMap.has(stdGuess)) return stdGuess;
+    return null;
   }
 
   /**
@@ -901,6 +1034,7 @@ export class CsvPreprocessor {
           createable: f.createable,
           updateable: f.updateable,
           autoNumber: f.autoNumber,
+          relationshipName: f.relationshipName,
         })),
       );
     }

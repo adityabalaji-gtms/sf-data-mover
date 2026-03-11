@@ -98,6 +98,7 @@ export interface Recipe {
 export interface RecipeObject {
   sobject: string;
   externalIdField: string | null;
+  resolveOnly?: boolean;
   filter?: string;
   excludeFields?: string[];
   includeFields?: string[];

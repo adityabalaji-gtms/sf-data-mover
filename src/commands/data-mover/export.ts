@@ -159,6 +159,11 @@ export default class Export extends SfCommand<ExportManifest> {
         const describe = describes.get(sobject);
         if (!recipeObj || !describe) continue;
 
+        if (recipeObj.resolveOnly) {
+          this.log(`  ${sobject}: resolve-only (ID map built, no data export)`);
+          continue;
+        }
+
         // Query data
         const soql = queryBuilder.buildQuery(recipeObj, describe, recipe.settings);
         this.spinner.start(`Querying ${sobject}`);
