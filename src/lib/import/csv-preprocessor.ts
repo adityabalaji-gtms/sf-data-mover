@@ -64,6 +64,14 @@ const SFID_PATTERN = /^[a-zA-Z0-9]{15}([a-zA-Z0-9]{3})?$/;
 const ALWAYS_STRIP = new Set(['OwnerId', 'CreatedById', 'LastModifiedById']);
 
 /**
+ * Fields that should never be stripped even if non-createable.
+ * CurrencyIsoCode is non-createable on OLI (derived from PricebookEntry) but
+ * the Bulk API uses it to resolve the correct currency-specific PricebookEntry
+ * in multi-currency orgs.
+ */
+const NEVER_STRIP = new Set(['CurrencyIsoCode']);
+
+/**
  * Preprocesses export CSVs before Bulk API upload.
  *
  * Handles:
@@ -838,6 +846,8 @@ export class CsvPreprocessor {
         toStrip.push(h);
         continue;
       }
+
+      if (NEVER_STRIP.has(h)) continue;
 
       const fieldDesc = fieldMap.get(h);
 
