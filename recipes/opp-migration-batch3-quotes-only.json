@@ -1,0 +1,55 @@
+{
+  "name": "Batch 3 - Quotes + QuoteLines Re-export",
+  "version": "1.0",
+  "description": "Re-export Quotes and QuoteLines for batch 3 Opps to fix parent mapping.",
+  "objects": [
+    {
+      "sobject": "Product2",
+      "externalIdField": "CPQ_External_ID__c",
+      "resolveOnly": true
+    },
+    {
+      "sobject": "SBQQ__ProductOption__c",
+      "externalIdField": "CPQ_External_ID__c",
+      "resolveOnly": true
+    },
+    {
+      "sobject": "Account",
+      "externalIdField": "Netsuite_Id__c",
+      "resolveOnly": true
+    },
+    {
+      "sobject": "Opportunity",
+      "externalIdField": "Netsuite_Id__c",
+      "resolveOnly": true,
+      "filter": "Id IN ('0064p00000XqlCGAAZ','0064p00000ZDovtAAD','0064p00000ZEG04AAH','0064p00000Zn3zQAAR','0064p00000a3EdKAAU','0065e00000MwnR5AAJ','0065e00000QDQsyAAH','006WR00000Clle8YAB','006WR00000GeQkKYAV','006WR00000OcpN6YAJ','006WR00000RN0XdYAL','006WR00000RSZZZYA5','006WR00000XygFuYAJ','006WR00000a7LMLYA2','006WR00000afFO9YAM','006WR00000cdI2PYAU','006WR00000ctF0XYAU','006WR00000dATwjYAG','006WR00000dsBt0YAE','006WR00000dwStVYAU','006WR00000erKPmYAM','006WR00000fXbqnYAC','006WR00000herT3YAI','006WR00000iiXi7YAE','006WR00000jChNRYA0','006WR00000kazYjYAI','006WR00000lEcS9YAK','006WR00000lTtHNYA0','006WR00000lUUYfYAO','006WR00000mLyyTYAS','006WR00000n5LqrYAE','006WR00000pqkJGYAY','006WR00000sPDatYAG','006WR00000tXADrYAO')"
+    },
+    {
+      "sobject": "SBQQ__Quote__c",
+      "externalIdField": null,
+      "excludeFields": [
+        "Bill_to_Contact__c",
+        "SBQQ__PrimaryContact__c"
+      ],
+      "filter": "SBQQ__Opportunity2__c IN ('0064p00000XqlCGAAZ','0064p00000ZDovtAAD','0064p00000ZEG04AAH','0064p00000Zn3zQAAR','0064p00000a3EdKAAU','0065e00000MwnR5AAJ','0065e00000QDQsyAAH','006WR00000Clle8YAB','006WR00000GeQkKYAV','006WR00000OcpN6YAJ','006WR00000RN0XdYAL','006WR00000RSZZZYA5','006WR00000XygFuYAJ','006WR00000a7LMLYA2','006WR00000afFO9YAM','006WR00000cdI2PYAU','006WR00000ctF0XYAU','006WR00000dATwjYAG','006WR00000dsBt0YAE','006WR00000dwStVYAU','006WR00000erKPmYAM','006WR00000fXbqnYAC','006WR00000herT3YAI','006WR00000iiXi7YAE','006WR00000jChNRYA0','006WR00000kazYjYAI','006WR00000lEcS9YAK','006WR00000lTtHNYA0','006WR00000lUUYfYAO','006WR00000mLyyTYAS','006WR00000n5LqrYAE','006WR00000pqkJGYAY','006WR00000sPDatYAG','006WR00000tXADrYAO')"
+    },
+    {
+      "sobject": "SBQQ__QuoteLine__c",
+      "externalIdField": null,
+      "filter": "SBQQ__Quote__r.SBQQ__Opportunity2__c IN ('0064p00000XqlCGAAZ','0064p00000ZDovtAAD','0064p00000ZEG04AAH','0064p00000Zn3zQAAR','0064p00000a3EdKAAU','0065e00000MwnR5AAJ','0065e00000QDQsyAAH','006WR00000Clle8YAB','006WR00000GeQkKYAV','006WR00000OcpN6YAJ','006WR00000RN0XdYAL','006WR00000RSZZZYA5','006WR00000XygFuYAJ','006WR00000a7LMLYA2','006WR00000afFO9YAM','006WR00000cdI2PYAU','006WR00000ctF0XYAU','006WR00000dATwjYAG','006WR00000dsBt0YAE','006WR00000dwStVYAU','006WR00000erKPmYAM','006WR00000fXbqnYAC','006WR00000herT3YAI','006WR00000iiXi7YAE','006WR00000jChNRYA0','006WR00000kazYjYAI','006WR00000lEcS9YAK','006WR00000lTtHNYA0','006WR00000lUUYfYAO','006WR00000mLyyTYAS','006WR00000n5LqrYAE','006WR00000pqkJGYAY','006WR00000sPDatYAG','006WR00000tXADrYAO')"
+    }
+  ],
+  "settings": {
+    "defaultExcludeFields": [
+      "Id",
+      "IsDeleted",
+      "CreatedDate",
+      "CreatedById",
+      "LastModifiedDate",
+      "LastModifiedById",
+      "SystemModstamp"
+    ],
+    "batchSize": 200,
+    "selfReferenceStrategy": "two-pass"
+  }
+}
